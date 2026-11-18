@@ -1,6 +1,6 @@
 {
   "package_name": "icomzero",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "app_name": "ICOMzero",
   "bin_name": "icomzero",
   "description": "IC-7300MK2 LAN audio, spectrum and receive tuning for Cardputer Zero",

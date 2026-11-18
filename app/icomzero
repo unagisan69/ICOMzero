@@ -304,7 +304,7 @@ class Display:
         self.history.paste(row.convert("RGB"), (0, 0))
 
     def render(self, values, selected, editing, status, volume, busy, frequency,
-               scope, band, volume_visible, radio_state=None):
+               scope, band, volume_visible, radio_state=None, help_open=False):
         image = Image.new("RGB", (WIDTH, HEIGHT), BG)
         draw = ImageDraw.Draw(image)
 
@@ -369,11 +369,30 @@ class Display:
             else:
                 wait = "Waiting for scope data" if status == "Receiving audio" else status
                 label(22, 91, wait, color=MUTED)
-            label(12, 155, "Z/C tune · B bands · Ent - ■" if busy else
-                  "Ent - ▶ · S setup · Esc exit", "small", MUTED)
+            label(12, 155, "Ent - ■" if busy else "Ent - ▶", "small", MUTED)
+            label(240, 155, "Tab - Help", "small", MUTED)
         if volume_visible:
             draw.rounded_rectangle((207, 39, 304, 65), radius=6, fill=BG, outline=GREEN)
             label(215, 44, f"Volume {volume}%", "small", GREEN)
+        if help_open:
+            draw.rounded_rectangle((6, 4, 314, 165), radius=7, fill=BG, outline=GREEN)
+            label(18, 10, "Keyboard shortcuts", color=GREEN)
+            shortcuts = (
+                ("Z / C", "Tune down / up (hold)"),
+                ("B", "Band selection"),
+                ("N", "Noise reduction on / off"),
+                ("T", "Antenna tune (transmits)"),
+                ("Fn + S / D", "Volume down / up"),
+                ("Fn + A", "Mute / unmute"),
+                ("Enter", "Play / stop"),
+                ("S", "Setup when disconnected"),
+                ("Esc", "Exit app"),
+            )
+            for index, (key, action) in enumerate(shortcuts):
+                y = 33 + index * 12
+                label(18, y, key, "small", GREEN)
+                label(101, y, action, "small")
+            label(18, 149, "Tab / Esc - Close help", "small", MUTED)
         frame = struct.pack(f"<{WIDTH * HEIGHT}H", *(
             (r >> 3) << 11 | (g >> 2) << 5 | b >> 3 for r, g, b in image.getdata()
         ))
@@ -400,6 +419,7 @@ def ui(lcd, keyboard):
     next_repeat = 0
     save_at = None
     band = None
+    help_open = False
     volume_until = 0
     redraw = None
     next_paint = 0
@@ -410,7 +430,7 @@ def ui(lcd, keyboard):
             if save_at is not None and now >= save_at:
                 save(values, rx.volume, rx.muted)
                 save_at = None
-            if selected is not None or band is not None or not rx.busy():
+            if selected is not None or band is not None or help_open or not rx.busy():
                 held_tune = None
             if held_tune is not None and now >= next_repeat:
                 rx.tune(steps=-1 if held_tune in (44, 105) else 1)
@@ -420,7 +440,7 @@ def ui(lcd, keyboard):
                 band = None
             scope = rx.scope if busy and rx.scope and now - rx.scope[0] < 2 else None
             state = (tuple(values), selected, editing, rx.status, 0 if rx.muted else rx.volume, busy,
-                     rx.frequency if busy else None, scope, band, now < volume_until, rx.radio_state)
+                     rx.frequency if busy else None, scope, band, now < volume_until, rx.radio_state, help_open)
             if now >= next_paint and (state != redraw or now < initial):
                 display.render(*state)
                 redraw = state
@@ -444,6 +464,10 @@ def ui(lcd, keyboard):
                         held_tune = None
                     continue
                 if pressed == 2:
+                    continue
+                if help_open:
+                    if key in (1, 15):
+                        help_open = False
                     continue
                 if key in (KEY_FN_S, KEY_FN_D, KEY_VOLUME_DOWN, KEY_VOLUME_UP) or (fn and key in (31, 32)):
                     increase = key in (32, KEY_FN_D, KEY_VOLUME_UP)
@@ -492,6 +516,9 @@ def ui(lcd, keyboard):
                     elif key == 28 and pressed == 1:
                         rx.change_band(BANDS[band][1])
                         band = None
+                elif key == 15:
+                    help_open = True
+                    held_tune = None
                 elif key == 1:
                     return
                 elif key == 31 and not rx.busy():

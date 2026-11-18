@@ -9,7 +9,7 @@ The first App Store release has passed automated validation and is awaiting main
 Download the `.deb` from [GitHub Releases](https://github.com/unagisan69/ICOMzero/releases), then install it on the Cardputer.
 
 ```sh
-sudo apt install ./icomzero_0.3.0-1_all.deb
+sudo apt install ./icomzero_0.3.1-1_all.deb
 ```
 
 Open **ICOMzero** from APPLaunch. Connect the Cardputer to a network that can reach the radio and enable the IC-7300MK2's network control with a configured user account.
@@ -24,6 +24,8 @@ Open **ICOMzero** from APPLaunch. Connect the Cardputer to a network that can re
 
 The waterfall uses the radio’s scope span and center or fixed-range settings. The radio negotiates the secondary UDP ports. Keep the radio and Cardputer on the same LAN. If the radio is busy, disconnect the other LAN client and try again. Settings are saved in `~/.config/icomzero/radio.json` (or under `$XDG_CONFIG_HOME`) with user-only permissions. The password is stored in that file as text and encoded using Icom's LAN protocol on the wire.
 
+Press **Tab** on the receiver screen to open the keyboard shortcut guide. **Tab** or **Esc** closes it.
+
 ## Build and test
 
 On Debian or the Cardputer itself:
@@ -32,7 +34,7 @@ On Debian or the Cardputer itself:
 git clone https://github.com/CardputerZero/AppBuilder.git ../AppBuilder
 make check
 make package
-sudo apt install ./build/icomzero_0.3.0-1_all.deb
+sudo apt install ./build/icomzero_0.3.1-1_all.deb
 ```
 
 Use `make package APPBUILDER=/path/to/AppBuilder` for another checkout location. The package includes a foreground APPLaunch entry and declares its Python, Pillow, font, ALSA, and PipeWire dependencies.
