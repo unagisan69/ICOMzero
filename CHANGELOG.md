@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.0 — 2026-11-18
+
+- Selected LSB for the 160/80/40 m band presets and USB for the remaining presets.
+- Added live mode, noise reduction, and tuner state readback.
+- Added N to toggle noise reduction and T to start the antenna tuner.
+- Used PipeWire speaker playback to fix silent first connections through the direct ALSA mixer.
+- Changed playback controls to Ent - ▶ and Ent - ■.
+
 ## 0.2.1 — 2026-11-18
 
 - Kept the stock Cardputer Fn modifier active across repeated volume key presses.

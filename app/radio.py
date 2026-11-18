@@ -105,7 +105,8 @@ class Channel:
 
 
 def listen(host, port, username, password, stop, on_status, on_audio,
-           on_frequency=lambda _: None, on_scope=lambda *_: None, take_tune=lambda: None):
+           on_frequency=lambda _: None, on_scope=lambda *_: None, take_tune=lambda: None,
+           take_commands=lambda: (), on_state=lambda *_: None):
     user = encode(username)
     secret = encode(password)
     with ExitStack() as stack:
@@ -243,7 +244,8 @@ def listen(host, port, username, password, stop, on_status, on_audio,
                             if cat_port and audio_port:
                                 cat = connect(cat_sock, cat_port)
                                 audio = connect(audio_sock, audio_port)
-                                civ = Civ(cat, civ_address or 0xb6, on_frequency, on_scope, take_tune)
+                                civ = Civ(cat, civ_address or 0xb6, on_frequency, on_scope, take_tune,
+                                          take_commands, on_state)
         finally:
             if civ:
                 with suppress(OSError):

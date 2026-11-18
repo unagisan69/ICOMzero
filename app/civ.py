@@ -61,12 +61,17 @@ class Scope:
 
 
 class Civ:
-    def __init__(self, channel, address, on_frequency, on_scope, take_tune):
+    def __init__(self, channel, address, on_frequency, on_scope, take_tune,
+                 take_commands=lambda: (), on_state=lambda *_: None):
         self.channel = channel
         self.address = address
         self.on_frequency = on_frequency
         self.on_scope = on_scope
         self.take_tune = take_tune
+        self.take_commands = take_commands
+        self.on_state = on_state
+        self.nr = None
+        self.toggle_nr = False
         self.scope = Scope()
         self.seq = 0
         self.next_poll = 0
@@ -101,7 +106,22 @@ class Civ:
             return
         if now >= self.next_poll:
             self.send(b"\x03")
+            self.send(b"\x04")
+            self.send(b"\x16\x40")
+            self.send(b"\x1c\x01")
             self.next_poll = now + 0.4
+        for action, value in self.take_commands():
+            if action == "mode" and value in (0, 1, 3, 5):
+                self.send(bytes((6, value, 1)))
+            elif action == "nr":
+                if self.nr is None:
+                    self.toggle_nr = not self.toggle_nr
+                    self.send(b"\x16\x40")
+                else:
+                    self.nr = not self.nr
+                    self.send(bytes((0x16, 0x40, self.nr)))
+            elif action == "tuner":
+                self.send(b"\x1c\x01\x02")
         if now >= self.next_tune:
             target = self.take_tune()
             if target is not None and MIN_HZ <= target <= MAX_HZ:
@@ -128,6 +148,17 @@ class Civ:
                 frequency = decode_frequency(command[1:])
                 if frequency is not None:
                     self.on_frequency(frequency)
+            elif len(command) in (2, 3) and command[0] in (1, 4):
+                self.on_state("mode", command[1])
+            elif len(command) == 3 and command[:2] == b"\x16\x40" and command[2] in (0, 1):
+                self.nr = bool(command[2])
+                if self.toggle_nr:
+                    self.toggle_nr = False
+                    self.nr = not self.nr
+                    self.send(bytes((0x16, 0x40, self.nr)))
+                self.on_state("nr", self.nr)
+            elif len(command) == 3 and command[:2] == b"\x1c\x01":
+                self.on_state("tuner", command[2])
             elif command.startswith(b"\x27\x00\x00"):
                 result = self.scope.parse(command[3:])
                 if result:
