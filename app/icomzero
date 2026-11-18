@@ -1,0 +1,340 @@
+#!/usr/bin/python3
+"""Cardputer Zero receiver and launcher UI."""
+
+import argparse
+from array import array
+from contextlib import suppress
+import fcntl
+import getpass
+import json
+import os
+from pathlib import Path
+import select
+import signal
+import struct
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+
+from PIL import Image, ImageDraw, ImageFont
+
+from radio import MODEL, RATE, RadioError, encode, listen
+
+FIELDS = ("Host", "Control port", "Username", "Password")
+DEFAULTS = ("", "50001", "", "")
+CONFIG = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "icomzero/radio.json"
+SPEAKER = "plughw:CARD=ES8389Audio,DEV=0"
+EVENT = struct.Struct("@llHHi")
+WIDTH, HEIGHT = 320, 170
+BG, CARD, WHITE, MUTED, GREEN = "#101a21", "#1d2d36", "#f0f6f6", "#9bb2bb", "#70edbb"
+KEYS = {
+    **dict(enumerate("1234567890-=", 2)),
+    **dict(enumerate("qwertyuiop[]", 16)),
+    **dict(enumerate("asdfghjkl;'\x60", 30)),
+    **dict(enumerate("zxcvbnm,./", 44)),
+    57: " ", 43: "\\",
+}
+SHIFTED = dict(zip("1234567890-=;',./[]\x60\\", "!@#$%^&*()_+:\"<>?{}~|"))
+
+
+def save(values):
+    CONFIG.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(mode="w", dir=CONFIG.parent, delete=False) as temp:
+        try:
+            json.dump(dict(zip(FIELDS, values)), temp)
+            temp.flush()
+            os.replace(temp.name, CONFIG)
+        finally:
+            Path(temp.name).unlink(missing_ok=True)
+
+
+def load():
+    try:
+        data = json.loads(CONFIG.read_text())
+        if isinstance(data, dict):
+            return [str(data.get(key, default)) for key, default in zip(FIELDS, DEFAULTS)]
+    except (OSError, ValueError):
+        pass
+    return list(DEFAULTS)
+
+
+def connection(values):
+    host, port, user, password = values
+    if not host.strip():
+        raise RadioError("Enter the radio address in Setup")
+    if not port.isascii() or not port.isdecimal() or not 1 <= int(port) <= 65535:
+        raise RadioError("Control port must be 1–65535")
+    encode(user)
+    encode(password)
+    return host.strip(), int(port), user, password
+
+
+class Receiver:
+    def __init__(self, report=lambda _: None):
+        self.status = "Disconnected"
+        self.volume = 60
+        self.peak = self.packets = self.written = self.dropped = 0
+        self.stop = threading.Event()
+        self.thread = None
+        self.report = report
+
+    def update(self, status):
+        self.status = status
+        self.report(status)
+
+    def start(self, settings):
+        self.peak = self.packets = self.written = self.dropped = 0
+        self.stop.clear()
+        self.update("Finding radio")
+        self.thread = threading.Thread(target=self.run, args=(settings,), daemon=True)
+        self.thread.start()
+
+    def run(self, settings):
+        player = None
+        try:
+            player = subprocess.Popen(
+                ["aplay", "-q", "-D", SPEAKER, "-t", "raw", "-f", "S16_LE",
+                 "-c", "1", "-r", str(RATE), "--buffer-time=150000", "--period-time=30000"],
+                stdin=subprocess.PIPE, bufsize=0,
+            )
+            fd = player.stdin.fileno()
+            os.set_blocking(fd, False)
+            last_meter = 0
+
+            def play(pcm):
+                nonlocal last_meter
+                self.packets += 1
+                samples = array("h", pcm)
+                if sys.byteorder != "little":
+                    samples.byteswap()
+                now = time.monotonic()
+                if now - last_meter >= 0.06:
+                    self.peak = max(abs(sample) for sample in samples)
+                    last_meter = now
+                volume = self.volume
+                if volume != 100:
+                    samples = array("h", (sample * volume // 100 for sample in samples))
+                    if sys.byteorder != "little":
+                        samples.byteswap()
+                    pcm = samples.tobytes()
+                try:
+                    self.written += os.write(fd, pcm)
+                except BlockingIOError:
+                    self.dropped += 1
+                except BrokenPipeError as error:
+                    raise RadioError("Cardputer audio output unavailable") from error
+
+            listen(*settings, self.stop, self.update, play)
+            self.update("Disconnected")
+        except (RadioError, OSError) as error:
+            self.update(str(error) if isinstance(error, RadioError) else f"Connection error: {error.strerror}")
+        finally:
+            self.peak = 0
+            if player is not None:
+                player.terminate()
+                player.stdin.close()
+                try:
+                    player.wait(timeout=1)
+                except subprocess.TimeoutExpired:
+                    player.kill()
+                    player.wait()
+
+    def busy(self):
+        return self.thread is not None and self.thread.is_alive()
+
+
+class Display:
+    def __init__(self, fd):
+        self.fd = fd
+        mode, fixed = bytearray(160), bytearray(80)
+        fcntl.ioctl(fd, 0x4600, mode)
+        fcntl.ioctl(fd, 0x4602, fixed)
+        w, h, _, _, x, y, depth = struct.unpack_from("=7I", mode)
+        colors = tuple(struct.unpack_from("=2I", mode, i) for i in (32, 44, 56))
+        self.stride = struct.unpack_from("=I", fixed, 48)[0]
+        if (w, h, depth, colors) != (WIDTH, HEIGHT, 16, ((11, 5), (5, 6), (0, 5))):
+            raise OSError("Expected the stock 320×170 RGB565 LCD")
+        if self.stride < (x + WIDTH) * 2:
+            raise OSError("Invalid LCD stride")
+        self.offset = y * self.stride + x * 2
+        font = "/usr/share/fonts/truetype/dejavu/DejaVuSans"
+        self.fonts = {
+            "title": ImageFont.truetype(font + "-Bold.ttf", 22),
+            "body": ImageFont.truetype(font + ".ttf", 14),
+            "small": ImageFont.truetype(font + ".ttf", 12),
+        }
+
+    def render(self, values, selected, editing, status, volume, peak, busy):
+        image = Image.new("RGB", (WIDTH, HEIGHT), BG)
+        draw = ImageDraw.Draw(image)
+
+        def label(x, y, text, style="body", color=WHITE):
+            font = self.fonts[style]
+            while text and draw.textlength(text, font=font) > WIDTH - x - 12:
+                text = text[:-1]
+            draw.text((x, y), text, font=font, fill=color)
+
+        label(12, 7, "ICOMzero", "title")
+        label(206, 14, MODEL, "small", MUTED)
+        if selected is not None:
+            for index, name in enumerate(FIELDS):
+                y = 37 + 24 * index
+                active = selected == index
+                value = "•" * len(values[index]) if name == "Password" else values[index]
+                value = value[-19:]
+                if active:
+                    draw.rounded_rectangle((8, y, 312, y + 22), radius=4, fill=CARD)
+                label(13, y + 2, name, "small", GREEN if active else MUTED)
+                label(105, y + 2, (value or "—") + ("▏" if active and editing else ""), "small")
+            label(12, 147, "Enter save  ·  Esc cancel" if editing else
+                  "↑↓ / Tab field   ·   Enter edit   ·   Esc done", "small", MUTED)
+        else:
+            draw.rounded_rectangle((8, 39, 312, 124), radius=8, fill=CARD)
+            label(19, 49, status, color=GREEN if status == "Receiving audio" else WHITE)
+            label(19, 72, f"Volume {volume}%", "small", MUTED)
+            draw.rounded_rectangle((19, 98, 301, 110), radius=4, fill=BG)
+            if peak:
+                draw.rounded_rectangle((19, 98, 19 + max(2, peak * 282 // 32768), 110),
+                                       radius=4, fill=GREEN)
+            label(12, 137, "Enter stop   ·   ± volume" if busy else
+                  "Enter listen   ·   S setup   ·   ± volume", "small")
+            label(12, 152, "Esc exit", "small", MUTED)
+        frame = struct.pack(f"<{WIDTH * HEIGHT}H", *(
+            (r >> 3) << 11 | (g >> 2) << 5 | b >> 3 for r, g, b in image.getdata()
+        ))
+        if self.stride == WIDTH * 2:
+            if os.pwrite(self.fd, frame, self.offset) != len(frame):
+                raise OSError("Short LCD write")
+        else:
+            for y in range(HEIGHT):
+                row = frame[y * WIDTH * 2:(y + 1) * WIDTH * 2]
+                if os.pwrite(self.fd, row, self.offset + y * self.stride) != len(row):
+                    raise OSError("Short LCD write")
+
+
+def ui(lcd, keyboard):
+    display = Display(lcd)
+    values = load()
+    rx = Receiver()
+    selected = None if values[0] else 0
+    editing = False
+    original = ""
+    shift = set()
+    redraw = None
+    next_paint = 0
+    initial = time.monotonic() + 2
+    try:
+        while True:
+            now = time.monotonic()
+            busy = rx.busy()
+            state = (tuple(values), selected, editing, rx.status, rx.volume, rx.peak, busy)
+            if now >= next_paint and (state != redraw or now < initial):
+                display.render(*state)
+                redraw = state
+                next_paint = now + 0.08
+            if not select.select([keyboard], [], [], 0.05)[0]:
+                continue
+            events = os.read(keyboard, EVENT.size * 32)
+            if not events:
+                raise OSError("Cardputer keyboard disconnected")
+            for _, _, kind, key, pressed in EVENT.iter_unpack(events):
+                if kind != 1:
+                    continue
+                if key in (42, 54):
+                    (shift.add if pressed else shift.discard)(key)
+                    continue
+                if not pressed:
+                    continue
+                if editing:
+                    if key == 1:
+                        values[selected], editing = original, False
+                    elif key == 28 and pressed == 1:
+                        try:
+                            save(values)
+                            editing = False
+                        except OSError:
+                            rx.update("Could not save settings")
+                            selected, editing = None, False
+                    elif key == 14:
+                        values[selected] = values[selected][:-1]
+                    elif key in KEYS:
+                        char = KEYS[key]
+                        if shift:
+                            char = SHIFTED.get(char, char.upper())
+                        limit = (253, 5, 16, 16)[selected]
+                        if len(values[selected]) < limit and (selected != 1 or char.isdecimal()):
+                            values[selected] += char
+                elif selected is not None:
+                    if key == 1:
+                        selected = None
+                    elif key in (15, 103, 108):
+                        selected = (selected + (-1 if key == 103 else 1)) % len(FIELDS)
+                    elif key == 28 and pressed == 1:
+                        original, editing = values[selected], True
+                elif key == 1:
+                    return
+                elif key == 31 and not rx.busy():
+                    selected = 0
+                elif key in (12, 13):
+                    rx.volume = min(100, max(0, rx.volume + (5 if key == 13 else -5)))
+                elif key == 28 and pressed == 1:
+                    if rx.busy():
+                        rx.stop.set()
+                    else:
+                        try:
+                            rx.start(connection(values))
+                        except RadioError as error:
+                            rx.update(str(error))
+    finally:
+        rx.stop.set()
+        if rx.thread is not None:
+            rx.thread.join(timeout=2)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument("--configure", nargs=2, metavar=("HOST", "USERNAME"))
+    modes.add_argument("--test-audio", type=float, metavar="SECONDS")
+    modes.add_argument("--check-display", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--port", default="50001")
+    args = parser.parse_args()
+    if args.configure:
+        host, username = args.configure
+        password = getpass.getpass("Radio password: ") if sys.stdin.isatty() else sys.stdin.readline().rstrip("\n")
+        values = (host, args.port, username, password)
+        connection(values)
+        save(values)
+    elif args.test_audio is not None:
+        if not 0 < args.test_audio <= 120:
+            parser.error("--test-audio requires 0 < seconds <= 120")
+        rx = Receiver(lambda status: print(status, flush=True))
+        rx.start(connection(load()))
+        rx.thread.join(timeout=args.test_audio)
+        rx.stop.set()
+        rx.thread.join(timeout=2)
+        print(f"RX packets {rx.packets}, ALSA bytes queued {rx.written}, queue drops {rx.dropped}")
+        return int(rx.busy() or not rx.written or rx.status != "Disconnected")
+    else:
+        def exit_on_signal(*_):
+            raise KeyboardInterrupt
+
+        signal.signal(signal.SIGTERM, exit_on_signal)
+        with open("/dev/fb_lcd", "r+b", buffering=0) as lcd:
+            if args.check_display:
+                Display(lcd.fileno()).render(load(), None, False, "Disconnected", 60, 0, False)
+            else:
+                with open("/dev/input/cardputer-zero-internal", "rb", buffering=0) as keyboard:
+                    ui(lcd.fileno(), keyboard.fileno())
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        sys.exit(0)
+    except (RadioError, OSError) as error:
+        sys.exit(str(error))

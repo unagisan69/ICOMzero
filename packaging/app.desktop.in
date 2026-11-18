@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name={{APP_NAME}}
+Comment=Listen to an Icom IC-7300MK2 over LAN
+Exec={{APP_EXEC}}
+Icon={{APP_ICON}}
+Terminal={{APP_TERMINAL}}
+Sysplause={{APP_SYSPLAUSE}}
