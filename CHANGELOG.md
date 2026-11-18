@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Prepared the App Store listing with native screenshots, a 256 px icon, permission declarations, and localized summaries.
+
 ## 0.3.0 — 2026-11-18
 
 - Selected LSB for the 160/80/40 m band presets and USB for the remaining presets.
