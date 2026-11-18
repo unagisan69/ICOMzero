@@ -97,7 +97,7 @@ class Receiver:
         try:
             player = subprocess.Popen(
                 ["aplay", "-q", "-D", SPEAKER, "-t", "raw", "-f", "S16_LE",
-                 "-c", "1", "-r", str(RATE), "--buffer-time=150000", "--period-time=30000"],
+                 "-c", "1", "-r", str(RATE), "--buffer-time=300000", "--period-time=30000"],
                 stdin=subprocess.PIPE, bufsize=0,
             )
             fd = player.stdin.fileno()
