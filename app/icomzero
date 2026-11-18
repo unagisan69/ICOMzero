@@ -165,8 +165,9 @@ class Receiver:
                     pcm = samples.tobytes()
                 try:
                     self.written += os.write(fd, pcm)
-                    startup_deadline = now + 8
-                    self.update("Receiving audio")
+                    if now - last_start >= 0.1:
+                        startup_deadline = now + 8
+                        self.update("Receiving audio")
                 except BlockingIOError:
                     self.dropped += 1
                 except BrokenPipeError:
