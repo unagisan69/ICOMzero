@@ -2,7 +2,7 @@ APPBUILDER ?= ../AppBuilder
 
 .PHONY: package check
 package:
-	APPBUILDER="$$(cd "$(APPBUILDER)" && pwd)" && \
+	umask 022; APPBUILDER="$$(cd "$(APPBUILDER)" && pwd)" && \
 	bash "$$APPBUILDER/scripts/pack-deb.sh" "$(CURDIR)" --skip-build --output-dir "$(CURDIR)/build"
 
 check:

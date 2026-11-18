@@ -1,5 +1,6 @@
 #!/bin/sh
 set -eu
+chmod 755 "$STAGE"
 install -D -m 755 app/icomzero "$STAGE$APP_INSTALL_DIR/icomzero"
 install -D -m 644 app/radio.py "$STAGE$APP_INSTALL_DIR/radio.py"
 install -D -m 644 LICENSE "$STAGE/usr/share/doc/icomzero/copyright"

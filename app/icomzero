@@ -81,8 +81,9 @@ class Receiver:
         self.report = report
 
     def update(self, status):
-        self.status = status
-        self.report(status)
+        if self.status != status:
+            self.status = status
+            self.report(status)
 
     def start(self, settings):
         self.peak = self.packets = self.written = self.dropped = 0
@@ -133,10 +134,9 @@ class Receiver:
         finally:
             self.peak = 0
             if player is not None:
-                player.terminate()
                 player.stdin.close()
                 try:
-                    player.wait(timeout=1)
+                    player.wait(timeout=0.6)
                 except subprocess.TimeoutExpired:
                     player.kill()
                     player.wait()
