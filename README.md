@@ -4,6 +4,8 @@ Listen to an Icom **IC-7300MK2** on a **Cardputer Zero** running the stock M5Sta
 
 ## Install
 
+The first App Store release has passed automated validation and is awaiting maintainer review. [Track the submission](https://github.com/CardputerZero/packages/pull/480).
+
 Download the `.deb` from [GitHub Releases](https://github.com/unagisan69/ICOMzero/releases), then install it on the Cardputer.
 
 ```sh

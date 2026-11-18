@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Prepared the App Store listing with native screenshots, a 256 px icon, permission declarations, and localized summaries.
+- Submitted version 0.3.0 to CardputerZero/packages PR #480 with the device demo. Automated package validation passed; first-release maintainer review is pending.
 
 ## 0.3.0 — 2026-11-18
 
