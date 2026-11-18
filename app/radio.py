@@ -8,6 +8,8 @@ import socket
 import struct
 import time
 
+from civ import Civ
+
 HEADER = struct.Struct("<IHHII")
 RATE = 48000
 MODEL = "IC-7300MK2"
@@ -102,7 +104,8 @@ class Channel:
         return kind, data
 
 
-def listen(host, port, username, password, stop, on_status, on_audio):
+def listen(host, port, username, password, stop, on_status, on_audio,
+           on_frequency=lambda _: None, on_scope=lambda *_: None, take_tune=lambda: None):
     user = encode(username)
     secret = encode(password)
     with ExitStack() as stack:
@@ -125,7 +128,7 @@ def listen(host, port, username, password, stop, on_status, on_audio):
 
         control = connect(bind(), port)
         cat_sock, audio_sock = bind(), bind()
-        cat = audio = None
+        cat = audio = civ = None
         request_id = randbits(16)
         token = b"\0" * 4
         auth_seq = 0
@@ -157,6 +160,8 @@ def listen(host, port, username, password, stop, on_status, on_audio):
                 for channel in (control, cat, audio):
                     if channel:
                         channel.tick(now)
+                if civ:
+                    civ.tick(now)
                 if now >= renewal:
                     send_token(5)
                     renewal = now + 60
@@ -181,7 +186,9 @@ def listen(host, port, username, password, stop, on_status, on_audio):
                             deadline = time.monotonic() + 6
                             on_audio(data[24:])
                         continue
-                    if channel is not control:
+                    if channel is cat:
+                        if kind == 0:
+                            civ.receive(data)
                         continue
                     if kind == 6 and size == 16 and not login_sent:
                         on_status("Signing in")
@@ -208,11 +215,11 @@ def listen(host, port, username, password, stop, on_status, on_audio):
                                 identity = data[offset:offset + 16]
                                 if identity[7:9] == b"\x10\x80":
                                     identity = b"\0" * 7 + identity[7:9] + b"\0" + identity[10:]
-                                identities[identity] = name
+                                identities[identity] = (name, data[offset + 82])
                         if not identities:
                             raise RadioError("Expected an IC-7300MK2")
                     if authenticated and identities and not stream_requested:
-                        identity, name = next(iter(identities.items()))
+                        identity, (name, civ_address) = next(iter(identities.items()))
                         body = request(144, 3)
                         body[16:32] = identity
                         body[48:48 + len(name)] = name
@@ -236,7 +243,11 @@ def listen(host, port, username, password, stop, on_status, on_audio):
                             if cat_port and audio_port:
                                 cat = connect(cat_sock, cat_port)
                                 audio = connect(audio_sock, audio_port)
+                                civ = Civ(cat, civ_address or 0xb6, on_frequency, on_scope, take_tune)
         finally:
+            if civ:
+                with suppress(OSError):
+                    civ.close()
             if authenticated:
                 with suppress(OSError):
                     send_token(1)

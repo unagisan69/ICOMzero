@@ -20,6 +20,7 @@ import time
 
 from PIL import Image, ImageDraw, ImageFont
 
+from civ import MIN_HZ, MAX_HZ
 from radio import MODEL, RATE, RadioError, encode, listen
 
 FIELDS = ("Host", "Control port", "Username", "Password")
@@ -29,6 +30,16 @@ SPEAKER = "plughw:CARD=ES8389Audio,DEV=0"
 EVENT = struct.Struct("@llHHi")
 WIDTH, HEIGHT = 320, 170
 BG, CARD, WHITE, MUTED, GREEN = "#101a21", "#1d2d36", "#f0f6f6", "#9bb2bb", "#70edbb"
+TUNE_STEP = 1000
+BANDS = (
+    ("160m", 1_900_000), ("80m", 3_750_000), ("60m", 5_357_000),
+    ("40m", 7_150_000), ("30m", 10_125_000), ("20m", 14_200_000),
+    ("17m", 18_130_000), ("15m", 21_250_000), ("12m", 24_950_000),
+    ("10m", 28_400_000), ("6m", 50_125_000),
+)
+WATERFALL_W, WATERFALL_H = 296, 70
+KEY_FN, KEY_FN_D, KEY_FN_S = 0x1D0, 0x1E0, 0x1E3
+KEY_VOLUME_DOWN, KEY_VOLUME_UP = 114, 115
 KEYS = {
     **dict(enumerate("1234567890-=", 2)),
     **dict(enumerate("qwertyuiop[]", 16)),
@@ -75,10 +86,16 @@ class Receiver:
     def __init__(self, report=lambda _: None):
         self.status = "Disconnected"
         self.volume = 60
-        self.peak = self.packets = self.written = self.dropped = 0
+        self.packets = self.written = self.dropped = 0
         self.stop = threading.Event()
         self.thread = None
         self.report = report
+        self.frequency = None
+        self.scope = None
+        self.target = None
+        self.target_deadline = 0
+        self.tune_queue = None
+        self.tune_lock = threading.Lock()
 
     def update(self, status):
         if self.status != status:
@@ -86,7 +103,9 @@ class Receiver:
             self.report(status)
 
     def start(self, settings):
-        self.peak = self.packets = self.written = self.dropped = 0
+        self.packets = self.written = self.dropped = 0
+        self.frequency = self.scope = None
+        self.target = self.tune_queue = None
         self.stop.clear()
         self.update("Finding radio")
         self.thread = threading.Thread(target=self.run, args=(settings,), daemon=True)
@@ -102,20 +121,14 @@ class Receiver:
             )
             fd = player.stdin.fileno()
             os.set_blocking(fd, False)
-            last_meter = 0
 
             def play(pcm):
-                nonlocal last_meter
                 self.packets += 1
-                samples = array("h", pcm)
-                if sys.byteorder != "little":
-                    samples.byteswap()
-                now = time.monotonic()
-                if now - last_meter >= 0.06:
-                    self.peak = max(abs(sample) for sample in samples)
-                    last_meter = now
                 volume = self.volume
                 if volume != 100:
+                    samples = array("h", pcm)
+                    if sys.byteorder != "little":
+                        samples.byteswap()
                     samples = array("h", (sample * volume // 100 for sample in samples))
                     if sys.byteorder != "little":
                         samples.byteswap()
@@ -127,12 +140,12 @@ class Receiver:
                 except BrokenPipeError as error:
                     raise RadioError("Cardputer audio output unavailable") from error
 
-            listen(*settings, self.stop, self.update, play)
+            listen(*settings, self.stop, self.update, play,
+                   self.frequency_changed, self.scope_changed, self.take_tune)
             self.update("Disconnected")
         except (RadioError, OSError) as error:
             self.update(str(error) if isinstance(error, RadioError) else f"Connection error: {error.strerror}")
         finally:
-            self.peak = 0
             if player is not None:
                 player.stdin.close()
                 try:
@@ -140,6 +153,30 @@ class Receiver:
                 except subprocess.TimeoutExpired:
                     player.kill()
                     player.wait()
+
+    def frequency_changed(self, hz):
+        with self.tune_lock:
+            self.frequency = hz
+            if hz == self.target:
+                self.target = None
+
+    def scope_changed(self, start, end, bins):
+        self.scope = time.monotonic(), start, end, bins
+
+    def tune(self, hz=None, steps=0):
+        with self.tune_lock:
+            if self.frequency is None or not self.busy() or self.stop.is_set():
+                return
+            if hz is None:
+                base = self.target if time.monotonic() < self.target_deadline else None
+                hz = (base or self.frequency) + steps * TUNE_STEP
+            self.tune_queue = self.target = max(MIN_HZ, min(MAX_HZ, hz))
+            self.target_deadline = time.monotonic() + 0.75
+
+    def take_tune(self):
+        with self.tune_lock:
+            target, self.tune_queue = self.tune_queue, None
+            return target
 
     def busy(self):
         return self.thread is not None and self.thread.is_alive()
@@ -160,13 +197,54 @@ class Display:
             raise OSError("Invalid LCD stride")
         self.offset = y * self.stride + x * 2
         font = "/usr/share/fonts/truetype/dejavu/DejaVuSans"
+        self.history = Image.new("RGB", (WATERFALL_W, WATERFALL_H), "#080f20")
+        self.sweep = None
+        self.edges = None
+        self.levels = None
+        self.palette = []
+        stops = ((5, 10, 29), (20, 40, 119), (14, 118, 168),
+                 (69, 209, 148), (255, 191, 69), (255, 246, 207))
+        for value in range(256):
+            position = (min(value, 160) / 160) ** 0.65 * (len(stops) - 1)
+            index = min(int(position), len(stops) - 2)
+            fraction = position - index
+            self.palette.extend(round(low + (high - low) * fraction)
+                                for low, high in zip(stops[index], stops[index + 1]))
         self.fonts = {
             "title": ImageFont.truetype(font + "-Bold.ttf", 22),
             "body": ImageFont.truetype(font + ".ttf", 14),
             "small": ImageFont.truetype(font + ".ttf", 12),
         }
 
-    def render(self, values, selected, editing, status, volume, peak, busy):
+    def update_waterfall(self, scope):
+        if self.sweep is not None and scope is None:
+            self.history.paste("#080f20", (0, 0, WATERFALL_W, WATERFALL_H))
+            self.sweep = self.edges = self.levels = None
+        if scope is None or scope[0] == self.sweep:
+            return
+        self.sweep, start, end, bins = scope
+        span = end - start
+        offset = 0
+        if self.edges:
+            old_start, old_end = self.edges
+            offset = round((old_start - start) * WATERFALL_W / span)
+            if old_end - old_start != span:
+                offset = WATERFALL_W
+        previous = self.history.crop((0, 0, WATERFALL_W, WATERFALL_H - 1))
+        if offset:
+            self.history.paste("#080f20", (0, 0, WATERFALL_W, WATERFALL_H))
+        if abs(offset) < WATERFALL_W:
+            self.history.paste(previous, (offset, 1))
+        self.edges = start, end
+        self.levels = [max(bins[x * len(bins) // WATERFALL_W:
+                                (x + 1) * len(bins) // WATERFALL_W])
+                       for x in range(WATERFALL_W)]
+        row = Image.frombytes("P", (WATERFALL_W, 1), bytes(self.levels))
+        row.putpalette(self.palette)
+        self.history.paste(row.convert("RGB"), (0, 0))
+
+    def render(self, values, selected, editing, status, volume, busy, frequency,
+               scope, band, volume_visible):
         image = Image.new("RGB", (WIDTH, HEIGHT), BG)
         draw = ImageDraw.Draw(image)
 
@@ -176,9 +254,10 @@ class Display:
                 text = text[:-1]
             draw.text((x, y), text, font=font, fill=color)
 
-        label(12, 7, "ICOMzero", "title")
-        label(206, 14, MODEL, "small", MUTED)
+        self.update_waterfall(scope)
         if selected is not None:
+            label(12, 7, "Setup", "title")
+            label(206, 14, MODEL, "small", MUTED)
             for index, name in enumerate(FIELDS):
                 y = 37 + 24 * index
                 active = selected == index
@@ -190,17 +269,45 @@ class Display:
                 label(105, y + 2, (value or "—") + ("▏" if active and editing else ""), "small")
             label(12, 147, "Enter save  ·  Esc cancel" if editing else
                   "↑↓ / Tab field   ·   Enter edit   ·   Esc done", "small", MUTED)
+        elif band is not None:
+            label(12, 7, "Select band", "title")
+            for index, (name, hz) in enumerate(BANDS):
+                x, y = 12 + index % 3 * 100, 37 + index // 3 * 27
+                color = GREEN if index == band else WHITE
+                draw.rounded_rectangle((x, y, x + 94, y + 23), 4, fill=CARD,
+                                       outline=GREEN if index == band else CARD)
+                label(x + 7, y + 4, f"{name}   {hz / 1e6:g}", "small", color)
+            label(12, 151, "Z / C select   ·   Enter tune   ·   Esc back", "small", MUTED)
         else:
-            draw.rounded_rectangle((8, 39, 312, 124), radius=8, fill=CARD)
-            label(19, 49, status, color=GREEN if status == "Receiving audio" else WHITE)
-            label(19, 72, f"Volume {volume}%", "small", MUTED)
-            draw.rounded_rectangle((19, 98, 301, 110), radius=4, fill=BG)
-            if peak:
-                draw.rounded_rectangle((19, 98, 19 + max(2, peak * 282 // 32768), 110),
-                                       radius=4, fill=GREEN)
-            label(12, 137, "Enter stop   ·   ± volume" if busy else
-                  "Enter listen   ·   S setup   ·   ± volume", "small")
-            label(12, 152, "Esc exit", "small", MUTED)
+            label(12, 4, f"{frequency / 1e6:.6f}" if frequency else "ICOMzero", "title")
+            if frequency:
+                label(160, 12, "MHz", "small", MUTED)
+            badge = "RX" if status == "Receiving audio" else ("LINK" if busy else "OFF")
+            label(279, 12, badge, "small", GREEN if badge == "RX" else MUTED)
+
+            draw.rectangle((12, 35, 307, 67), fill="#111f2d")
+            for x in (12, 86, 160, 234, 307):
+                draw.line((x, 35, x, 67), fill="#26374a")
+            for y in (45, 56, 67):
+                draw.line((12, y, 307, y), fill="#26374a")
+            image.paste(self.history, (12, 68))
+            if self.edges and self.levels:
+                start, end = self.edges
+                draw.line([(12 + x, 67 - min(level, 160) * 31 // 160)
+                           for x, level in enumerate(self.levels)], fill=GREEN)
+                if frequency and start <= frequency <= end:
+                    x = 12 + round((frequency - start) * (WATERFALL_W - 1) / (end - start))
+                    draw.line((x, 35, x, 137), fill="#ffcc71")
+                label(12, 138, f"{start / 1e6:.3f}", "small", MUTED)
+                label(253, 138, f"{end / 1e6:.3f}", "small", MUTED)
+            else:
+                wait = "Waiting for scope data" if status == "Receiving audio" else status
+                label(22, 91, wait, color=MUTED)
+            label(12, 155, "Z / C tune   ·   B bands   ·   Enter stop" if busy else
+                  "Enter listen   ·   S setup   ·   Esc exit", "small", MUTED)
+        if volume_visible:
+            draw.rounded_rectangle((207, 39, 304, 65), radius=6, fill=BG, outline=GREEN)
+            label(215, 44, f"Volume {volume}%", "small", GREEN)
         frame = struct.pack(f"<{WIDTH * HEIGHT}H", *(
             (r >> 3) << 11 | (g >> 2) << 5 | b >> 3 for r, g, b in image.getdata()
         ))
@@ -222,6 +329,9 @@ def ui(lcd, keyboard):
     editing = False
     original = ""
     shift = set()
+    fn = False
+    band = None
+    volume_until = 0
     redraw = None
     next_paint = 0
     initial = time.monotonic() + 2
@@ -229,7 +339,11 @@ def ui(lcd, keyboard):
         while True:
             now = time.monotonic()
             busy = rx.busy()
-            state = (tuple(values), selected, editing, rx.status, rx.volume, rx.peak, busy)
+            if not busy:
+                band = None
+            scope = rx.scope if busy and rx.scope and now - rx.scope[0] < 2 else None
+            state = (tuple(values), selected, editing, rx.status, rx.volume, busy,
+                     rx.frequency if busy else None, scope, band, now < volume_until)
             if now >= next_paint and (state != redraw or now < initial):
                 display.render(*state)
                 redraw = state
@@ -242,10 +356,18 @@ def ui(lcd, keyboard):
             for _, _, kind, key, pressed in EVENT.iter_unpack(events):
                 if kind != 1:
                     continue
+                if key == KEY_FN:
+                    fn = bool(pressed)
+                    continue
                 if key in (42, 54):
                     (shift.add if pressed else shift.discard)(key)
                     continue
                 if not pressed:
+                    continue
+                if key in (KEY_FN_S, KEY_FN_D, KEY_VOLUME_DOWN, KEY_VOLUME_UP) or (fn and key in (31, 32)):
+                    increase = key in (32, KEY_FN_D, KEY_VOLUME_UP)
+                    rx.volume = min(100, max(0, rx.volume + (5 if increase else -5)))
+                    volume_until = time.monotonic() + 1.4
                     continue
                 if editing:
                     if key == 1:
@@ -273,12 +395,23 @@ def ui(lcd, keyboard):
                         selected = (selected + (-1 if key == 103 else 1)) % len(FIELDS)
                     elif key == 28 and pressed == 1:
                         original, editing = values[selected], True
+                elif band is not None:
+                    if key in (1, 48):
+                        band = None
+                    elif key in (44, 46, 105, 106, 103, 108, 15):
+                        step = {44: -1, 105: -1, 103: -3, 108: 3}.get(key, 1)
+                        band = (band + step) % len(BANDS)
+                    elif key == 28 and pressed == 1:
+                        rx.tune(BANDS[band][1])
+                        band = None
                 elif key == 1:
                     return
                 elif key == 31 and not rx.busy():
                     selected = 0
-                elif key in (12, 13):
-                    rx.volume = min(100, max(0, rx.volume + (5 if key == 13 else -5)))
+                elif key in (44, 46, 105, 106):
+                    rx.tune(steps=-1 if key in (44, 105) else 1)
+                elif key == 48 and rx.frequency and rx.busy() and pressed == 1:
+                    band = min(range(len(BANDS)), key=lambda i: abs(BANDS[i][1] - rx.frequency))
                 elif key == 28 and pressed == 1:
                     if rx.busy():
                         rx.stop.set()
@@ -324,7 +457,7 @@ def main():
         signal.signal(signal.SIGTERM, exit_on_signal)
         with open("/dev/fb_lcd", "r+b", buffering=0) as lcd:
             if args.check_display:
-                Display(lcd.fileno()).render(load(), None, False, "Disconnected", 60, 0, False)
+                Display(lcd.fileno()).render(load(), None, False, "Disconnected", 60, False, None, None, None, False)
             else:
                 with open("/dev/input/cardputer-zero-internal", "rb", buffering=0) as keyboard:
                     ui(lcd.fileno(), keyboard.fileno())

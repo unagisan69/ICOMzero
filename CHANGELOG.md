@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.0 — 2026-11-18
+
+- Displayed the IC-7300MK2's live spectrum and scrolling waterfall with a tuned-frequency marker.
+- Added 1 kHz receive tuning with Z and C and an amateur-band preset menu on B.
+- Moved sound adjustment to Fn+S and Fn+D and show the volume only while adjusting.
+
 ## 0.1.0 — 2026-11-18
 
 - Added receive-only LAN streaming for the Icom IC-7300MK2 with 48 kHz, 16-bit mono PCM.
