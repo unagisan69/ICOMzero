@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.1 — 2026-11-18
+
+- Kept the stock Cardputer Fn modifier active across repeated volume key presses.
+- Added held-key repeat for Z/C receive tuning.
+- Saved volume and mute settings across app restarts, with Fn+A toggling mute.
+- Shared the ALSA speaker output and retried temporary audio startup failures automatically.
+
 ## 0.2.0 — 2026-11-18
 
 - Displayed the IC-7300MK2's live spectrum and scrolling waterfall with a tuned-frequency marker.

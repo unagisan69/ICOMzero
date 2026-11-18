@@ -26,7 +26,7 @@ from radio import MODEL, RATE, RadioError, encode, listen
 FIELDS = ("Host", "Control port", "Username", "Password")
 DEFAULTS = ("", "50001", "", "")
 CONFIG = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "icomzero/radio.json"
-SPEAKER = "plughw:CARD=ES8389Audio,DEV=0"
+SPEAKER = 'plug:{SLAVE="dmix:CARD=ES8389Audio,DEV=0"}'
 EVENT = struct.Struct("@llHHi")
 WIDTH, HEIGHT = 320, 170
 BG, CARD, WHITE, MUTED, GREEN = "#101a21", "#1d2d36", "#f0f6f6", "#9bb2bb", "#70edbb"
@@ -38,6 +38,7 @@ BANDS = (
     ("10m", 28_400_000), ("6m", 50_125_000),
 )
 WATERFALL_W, WATERFALL_H = 296, 70
+KEY_CARDPUTER_FN = 389
 KEY_FN, KEY_FN_D, KEY_FN_S = 0x1D0, 0x1E0, 0x1E3
 KEY_VOLUME_DOWN, KEY_VOLUME_UP = 114, 115
 KEYS = {
@@ -50,11 +51,25 @@ KEYS = {
 SHIFTED = dict(zip("1234567890-=;',./[]\x60\\", "!@#$%^&*()_+:\"<>?{}~|"))
 
 
-def save(values):
+def read_config():
+    try:
+        data = json.loads(CONFIG.read_text())
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save(values, volume=None, muted=None):
+    data = read_config()
+    data.update(zip(FIELDS, values))
+    if volume is not None:
+        data["volume"] = volume
+    if muted is not None:
+        data["muted"] = muted
     CONFIG.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(mode="w", dir=CONFIG.parent, delete=False) as temp:
         try:
-            json.dump(dict(zip(FIELDS, values)), temp)
+            json.dump(data, temp)
             temp.flush()
             os.replace(temp.name, CONFIG)
         finally:
@@ -62,13 +77,8 @@ def save(values):
 
 
 def load():
-    try:
-        data = json.loads(CONFIG.read_text())
-        if isinstance(data, dict):
-            return [str(data.get(key, default)) for key, default in zip(FIELDS, DEFAULTS)]
-    except (OSError, ValueError):
-        pass
-    return list(DEFAULTS)
+    data = read_config()
+    return [str(data.get(key, default)) for key, default in zip(FIELDS, DEFAULTS)]
 
 
 def connection(values):
@@ -85,7 +95,10 @@ def connection(values):
 class Receiver:
     def __init__(self, report=lambda _: None):
         self.status = "Disconnected"
-        self.volume = 60
+        data = read_config()
+        volume = data.get("volume", 60)
+        self.volume = volume if type(volume) is int and 0 <= volume <= 100 else 60
+        self.muted = data.get("muted") is True
         self.packets = self.written = self.dropped = 0
         self.stop = threading.Event()
         self.thread = None
@@ -113,18 +126,35 @@ class Receiver:
 
     def run(self, settings):
         player = None
-        try:
-            player = subprocess.Popen(
+        last_start = 0
+        startup_deadline = time.monotonic() + 8
+
+        def start_player():
+            return subprocess.Popen(
                 ["aplay", "-q", "-D", SPEAKER, "-t", "raw", "-f", "S16_LE",
                  "-c", "1", "-r", str(RATE), "--buffer-time=300000", "--period-time=30000"],
-                stdin=subprocess.PIPE, bufsize=0,
+                stdin=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0,
             )
-            fd = player.stdin.fileno()
-            os.set_blocking(fd, False)
 
+        try:
             def play(pcm):
+                nonlocal player, last_start, startup_deadline
+                now = time.monotonic()
+                if player is not None and player.poll() is not None:
+                    player.stdin.close()
+                    player = None
+                if player is None:
+                    if now >= startup_deadline:
+                        raise RadioError("Cardputer audio output unavailable")
+                    if now - last_start < 0.25:
+                        return
+                    self.update("Opening audio output")
+                    player = start_player()
+                    os.set_blocking(player.stdin.fileno(), False)
+                    last_start = now
+                fd = player.stdin.fileno()
                 self.packets += 1
-                volume = self.volume
+                volume = 0 if self.muted else self.volume
                 if volume != 100:
                     samples = array("h", pcm)
                     if sys.byteorder != "little":
@@ -135,10 +165,14 @@ class Receiver:
                     pcm = samples.tobytes()
                 try:
                     self.written += os.write(fd, pcm)
+                    startup_deadline = now + 8
+                    self.update("Receiving audio")
                 except BlockingIOError:
                     self.dropped += 1
-                except BrokenPipeError as error:
-                    raise RadioError("Cardputer audio output unavailable") from error
+                except BrokenPipeError:
+                    player.stdin.close()
+                    player.wait()
+                    player = None
 
             listen(*settings, self.stop, self.update, play,
                    self.frequency_changed, self.scope_changed, self.take_tune)
@@ -330,6 +364,9 @@ def ui(lcd, keyboard):
     original = ""
     shift = set()
     fn = False
+    held_tune = None
+    next_repeat = 0
+    save_at = None
     band = None
     volume_until = 0
     redraw = None
@@ -338,11 +375,19 @@ def ui(lcd, keyboard):
     try:
         while True:
             now = time.monotonic()
+            if save_at is not None and now >= save_at:
+                save(values, rx.volume, rx.muted)
+                save_at = None
+            if selected is not None or band is not None or not rx.busy():
+                held_tune = None
+            if held_tune is not None and now >= next_repeat:
+                rx.tune(steps=-1 if held_tune in (44, 105) else 1)
+                next_repeat = now + 0.09
             busy = rx.busy()
             if not busy:
                 band = None
             scope = rx.scope if busy and rx.scope and now - rx.scope[0] < 2 else None
-            state = (tuple(values), selected, editing, rx.status, rx.volume, busy,
+            state = (tuple(values), selected, editing, rx.status, 0 if rx.muted else rx.volume, busy,
                      rx.frequency if busy else None, scope, band, now < volume_until)
             if now >= next_paint and (state != redraw or now < initial):
                 display.render(*state)
@@ -356,18 +401,29 @@ def ui(lcd, keyboard):
             for _, _, kind, key, pressed in EVENT.iter_unpack(events):
                 if kind != 1:
                     continue
-                if key == KEY_FN:
+                if key in (KEY_FN, KEY_CARDPUTER_FN):
                     fn = bool(pressed)
                     continue
                 if key in (42, 54):
                     (shift.add if pressed else shift.discard)(key)
                     continue
                 if not pressed:
+                    if held_tune is not None and key in (44, 46, 105, 106):
+                        held_tune = None
+                    continue
+                if pressed == 2:
                     continue
                 if key in (KEY_FN_S, KEY_FN_D, KEY_VOLUME_DOWN, KEY_VOLUME_UP) or (fn and key in (31, 32)):
                     increase = key in (32, KEY_FN_D, KEY_VOLUME_UP)
                     rx.volume = min(100, max(0, rx.volume + (5 if increase else -5)))
+                    rx.muted = False
                     volume_until = time.monotonic() + 1.4
+                    save_at = time.monotonic() + 0.3
+                    continue
+                if key == 113 or (fn and key == 30):
+                    rx.muted = not rx.muted
+                    volume_until = time.monotonic() + 1.4
+                    save_at = time.monotonic() + 0.3
                     continue
                 if editing:
                     if key == 1:
@@ -410,6 +466,8 @@ def ui(lcd, keyboard):
                     selected = 0
                 elif key in (44, 46, 105, 106):
                     rx.tune(steps=-1 if key in (44, 105) else 1)
+                    held_tune = key
+                    next_repeat = time.monotonic() + 0.35
                 elif key == 48 and rx.frequency and rx.busy() and pressed == 1:
                     band = min(range(len(BANDS)), key=lambda i: abs(BANDS[i][1] - rx.frequency))
                 elif key == 28 and pressed == 1:
@@ -421,6 +479,8 @@ def ui(lcd, keyboard):
                         except RadioError as error:
                             rx.update(str(error))
     finally:
+        if save_at is not None:
+            save(values, rx.volume, rx.muted)
         rx.stop.set()
         if rx.thread is not None:
             rx.thread.join(timeout=2)

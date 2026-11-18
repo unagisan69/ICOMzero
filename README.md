@@ -7,7 +7,7 @@ Listen to an Icom **IC-7300MK2** on a **Cardputer Zero** running the stock M5Sta
 Download the `.deb` from [GitHub Releases](https://github.com/unagisan69/ICOMzero/releases), then install it on the Cardputer.
 
 ```sh
-sudo apt install ./icomzero_0.2.0-1_all.deb
+sudo apt install ./icomzero_0.2.1-1_all.deb
 ```
 
 Open **ICOMzero** from APPLaunch. Connect the Cardputer to a network that can reach the radio and enable the IC-7300MK2's network control with a configured user account.
@@ -16,8 +16,8 @@ Open **ICOMzero** from APPLaunch. Connect the Cardputer to a network that can re
 
 1. Open **Setup** with **S**. On first launch, the setup screen opens automatically.
 2. Enter the radio's IPv4 address or hostname, control port (default **50001**), username, and password. Use **↑**, **↓**, or **Tab** to select a field. Press **Enter** to edit and again to save. Press **Esc** to leave setup.
-3. Press **Enter** to start or stop listening. **Z** and **C** tune down and up in 1 kHz steps. Press **B** for band presets, select with **Z** or **C**, then press **Enter** to tune to the displayed frequency. Presets leave the radio’s operating mode as set.
-4. Use **Fn+S** to lower the volume and **Fn+D** to raise it. The volume appears briefly as you adjust it. Press **Esc** to return to the launcher.
+3. Press **Enter** to start or stop listening. **Z** and **C** tune down and up in 1 kHz steps. Hold either key to scroll. Press **B** for band presets, select with **Z** or **C**, then press **Enter** to tune to the displayed frequency. Presets leave the radio’s operating mode as set.
+4. Use **Fn+S** to lower the volume and **Fn+D** to raise it. Hold Fn while pressing S or D repeatedly. **Fn+A** toggles mute. The volume appears briefly as you adjust it, and volume and mute are saved for the next launch. Press **Esc** to return to the launcher.
 
 The waterfall uses the radio’s scope span and center or fixed-range settings. The radio negotiates the secondary UDP ports. Keep the radio and Cardputer on the same LAN. If the radio is busy, disconnect the other LAN client and try again. Settings are saved in `~/.config/icomzero/radio.json` (or under `$XDG_CONFIG_HOME`) with user-only permissions. The password is stored in that file as text and encoded using Icom's LAN protocol on the wire.
 
@@ -29,7 +29,7 @@ On Debian or the Cardputer itself:
 git clone https://github.com/CardputerZero/AppBuilder.git ../AppBuilder
 make check
 make package
-sudo apt install ./build/icomzero_0.2.0-1_all.deb
+sudo apt install ./build/icomzero_0.2.1-1_all.deb
 ```
 
 Use `make package APPBUILDER=/path/to/AppBuilder` for another checkout location. The package includes a foreground APPLaunch entry and declares its Python, Pillow, font, and ALSA dependencies.
