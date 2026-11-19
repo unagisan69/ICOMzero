@@ -1,12 +1,16 @@
 # Changelog
 
+## 2026-11-19
+
+- App Store submission #480 was approved and merged. Updated installation instructions to prioritize the App Store and share code ICMZ.
+
 ## 0.3.1 — 2026-11-18
 
 - Added Tab - Help to the receiver footer and a modal shortcut guide.
 - Pause held-key tuning while help is open and close help with Tab or Esc.
 
 - Prepared the App Store listing with native screenshots, a 256 px icon, permission declarations, and localized summaries.
-- Submitted version 0.3.0 to CardputerZero/packages PR #480 with the device demo. Automated package validation passed; first-release maintainer review is pending.
+- Submitted version 0.3.0 to CardputerZero/packages PR #480 with the device demo. Automated package validation passed; approved and merged on 2026-11-19.
 
 ## 0.3.0 — 2026-11-18
 

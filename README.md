@@ -4,15 +4,21 @@ Listen to an Icom **IC-7300MK2** on a **Cardputer Zero** running the stock M5Sta
 
 ## Install
 
-The first App Store release has passed automated validation and is awaiting maintainer review. [Track the submission](https://github.com/CardputerZero/packages/pull/480).
+Install **ICOMzero** from the **App Store** on your Cardputer Zero.
 
-Download the `.deb` from [GitHub Releases](https://github.com/unagisan69/ICOMzero/releases), then install it on the Cardputer.
+1. Open **App Store** from the launcher.
+2. Find **ICOMzero**, or enter the share code **ICMZ**.
+3. Select **Install**, then open **ICOMzero** from APPLaunch.
+
+Connect the Cardputer to a network that can reach the radio and enable the IC-7300MK2's network control with a configured user account.
+
+For manual installation, download the `.deb` from [GitHub Releases](https://github.com/unagisan69/ICOMzero/releases), then install it on the Cardputer.
 
 ```sh
 sudo apt install ./icomzero_0.3.1-1_all.deb
 ```
 
-Open **ICOMzero** from APPLaunch. Connect the Cardputer to a network that can reach the radio and enable the IC-7300MK2's network control with a configured user account.
+Open **ICOMzero** from APPLaunch after installation.
 
 ## Listen
 
