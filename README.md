@@ -27,7 +27,7 @@ Connect the Cardputer to a network that can reach the radio and enable the radio
 For manual installation, download the `.deb` from [GitHub Releases](https://github.com/unagisan69/ICOMzero/releases), then install it on the Cardputer.
 
 ```sh
-sudo apt install ./icomzero_0.4.0-1_all.deb
+sudo apt install ./icomzero_0.4.1-1_all.deb
 ```
 
 Open **ICOMzero** from APPLaunch after installation.
@@ -52,13 +52,14 @@ On Debian or the Cardputer itself:
 
 ```sh
 git clone https://github.com/CardputerZero/AppBuilder.git ../AppBuilder
+sudo apt install python3-pil python3-numpy
 make check
 make test
 make package
-sudo apt install ./build/icomzero_0.4.0-1_all.deb
+sudo apt install ./build/icomzero_0.4.1-1_all.deb
 ```
 
-Use `make package APPBUILDER=/path/to/AppBuilder` for another checkout location. The package includes a foreground APPLaunch entry and declares its Python, Pillow, font, ALSA, and PipeWire dependencies.
+Use `make package APPBUILDER=/path/to/AppBuilder` for another checkout location. The package includes a foreground APPLaunch entry and declares its Python, Pillow, NumPy, font, ALSA, and PipeWire dependencies.
 
 To configure an Icom over SSH, run `icomzero --configure RADIO_HOST RADIO_USER` and enter the radio password at the prompt. Then run `icomzero --test-audio 10`. The diagnostic plays through the on-device speaker and prints the number of received packets and bytes passed to ALSA's playback process.
 

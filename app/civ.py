@@ -1,5 +1,6 @@
 """Native Icom frequency, controls and spectrum transport."""
 
+from collections import deque
 import struct
 import time
 
@@ -88,9 +89,14 @@ class Civ:
         self.scope = Scope(profile)
         self.seq = 0
         self.next_poll = 0
+        self.next_command = 0
+        self.pending = deque()
+        self.poll_index = 0
+        self.tune_target = None
+        self.tune_until = 0
+        self.retry_tune = 0
         self.next_open = 0
         self.next_scope = 0
-        self.next_tune = 0
         self.open = self.started = False
         self.scope_settings = {}
         self.changed_scope = set()
@@ -107,46 +113,63 @@ class Civ:
         self.channel.send(0, body=body, tracked=True)
         self.seq = (self.seq + 1) & 0xffff
 
+    def schedule(self, command, urgent=False):
+        if command not in self.pending:
+            (self.pending.appendleft if urgent else self.pending.append)(command)
+
     def tick(self, now):
         if not self.channel.ready:
             return
         if not self.open and now >= self.next_open:
             self.open_close(4)
-            self.send(b"\x03")
+            self.schedule(b"\x03", urgent=True)
             self.started = True
             self.next_open = now + 0.5
-        if not self.open:
-            return
-        if now >= self.next_poll:
-            self.send(b"\x03")
-            self.send(b"\x04")
-            if self.profile["nr"]:
-                self.send(b"\x16\x40")
-            if self.profile["tuner"]:
-                self.send(b"\x1c\x01")
-            self.next_poll = now + 0.4
-        for action, value in self.take_commands():
-            if action == "mode" and value in (0, 1, 3, 5):
-                self.send(bytes((6, value, 1)))
-            elif action == "nr" and self.profile["nr"]:
-                if self.nr is None:
-                    self.toggle_nr = not self.toggle_nr
-                    self.send(b"\x16\x40")
-                else:
-                    self.nr = not self.nr
-                    self.send(bytes((0x16, 0x40, self.nr)))
-            elif action == "tuner" and self.profile["tuner"] and self.profile["transmit"]:
-                self.send(b"\x1c\x01\x02")
-        if now >= self.next_tune:
+        if self.open:
             target = self.take_tune()
             if target is not None and MIN_HZ <= target <= MAX_HZ:
-                self.send(b"\x05" + encode_frequency(target))
-                self.next_tune = now + 0.08
-                self.next_poll = now + 0.12
-        if self.profile["scope_bins"] and now >= self.next_scope and now - self.last_scope > 2:
-            for setting in (0x10, 0x11):
-                self.send(bytes((0x27, setting)))
-            self.next_scope = now + 2
+                self.tune_target = target
+                self.tune_until = now + 3
+                self.retry_tune = now
+            for action, value in self.take_commands():
+                if action == "mode" and value in (0, 1, 3, 5):
+                    self.schedule(bytes((6, value, 1)), urgent=True)
+                elif action == "nr" and self.profile["nr"]:
+                    if self.nr is None:
+                        self.toggle_nr = not self.toggle_nr
+                        self.schedule(b"\x16\x40", urgent=True)
+                    else:
+                        self.nr = not self.nr
+                        self.schedule(bytes((0x16, 0x40, self.nr)), urgent=True)
+                elif action == "tuner" and self.profile["tuner"] and self.profile["transmit"]:
+                    self.schedule(b"\x1c\x01\x02", urgent=True)
+            if self.tune_target is not None and now >= self.tune_until:
+                self.tune_target = None
+            if now >= self.next_poll and not self.pending and self.tune_target is None:
+                queries = [b"\x03", b"\x04"]
+                if self.profile["nr"]:
+                    queries.append(b"\x16\x40")
+                if self.profile["tuner"]:
+                    queries.append(b"\x1c\x01")
+                self.schedule(queries[self.poll_index % len(queries)])
+                self.poll_index += 1
+                self.next_poll = now + 0.15
+            if self.profile["scope_bins"] and now >= self.next_scope and now - self.last_scope > 2:
+                for setting in (0x10, 0x11):
+                    self.schedule(bytes((0x27, setting)))
+                self.next_scope = now + 2
+        if now < self.next_command:
+            return
+        # Coalesce tuning to the latest target, ahead of routine state polls.
+        if self.tune_target is not None and now >= self.retry_tune:
+            self.send(b"\x05" + encode_frequency(self.tune_target))
+            self.schedule(b"\x03", urgent=True)
+            self.retry_tune = now + 0.2
+        elif self.pending:
+            self.send(self.pending.popleft())
+        else:
+            return
+        self.next_command = now + 0.025
 
     def receive(self, packet):
         if len(packet) < 27 or struct.unpack_from("<H", packet, 17)[0] != len(packet) - 21:
@@ -162,6 +185,8 @@ class Civ:
             if len(command) in (6, 7) and command[0] in (0, 3, 5):
                 frequency = decode_frequency(command[1:])
                 if frequency is not None:
+                    if frequency == self.tune_target:
+                        self.tune_target = None
                     self.on_frequency(frequency)
             elif len(command) in (2, 3) and command[0] in (1, 4):
                 self.on_state("mode", command[1])
@@ -170,7 +195,7 @@ class Civ:
                 if self.toggle_nr:
                     self.toggle_nr = False
                     self.nr = not self.nr
-                    self.send(bytes((0x16, 0x40, self.nr)))
+                    self.schedule(bytes((0x16, 0x40, self.nr)), urgent=True)
                 self.on_state("nr", self.nr)
             elif len(command) == 3 and command[:2] == b"\x1c\x01":
                 self.on_state("tuner", command[2])
@@ -186,7 +211,7 @@ class Civ:
                 if value in (0, 1):
                     self.scope_settings.setdefault(setting, value)
                     if value == 0:
-                        self.send(bytes((0x27, setting, 1)))
+                        self.schedule(bytes((0x27, setting, 1)))
                         self.changed_scope.add(setting)
 
     def close(self):

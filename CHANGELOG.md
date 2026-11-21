@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.1 — 2026-11-20
+
+- Recover transient connection failures automatically and retry lost Icom setup requests.
+- Request missing control/CAT packets, drain incoming bursts, and repeat disconnects while releasing the radio session.
+- Prioritize and pace tuning commands, coalesce held-key targets, retry missing readback, and show the requested frequency immediately.
+- Replace Python pixel and audio scaling loops with vectorized operations and allow display updates up to 30 fps.
+- Add regressions for lost packets, sequence wraparound, audio sequence resets, automatic reconnect and tuning feedback.
+
+
 ## 0.4.0 — 2026-11-20
 
 - Added direct network profiles for IC-705, IC-7610, IC-7760, IC-7850/7851, IC-905, IC-9700, and IC-R8600 alongside IC-7300MK2.

@@ -11,7 +11,7 @@ import sys
 import time
 
 from models import PROFILES
-from radio import RadioError
+from radio import RadioError, ConnectionLost
 
 PROFILE = PROFILES["TS-890S"]
 MODE_TO_ICOM = {1: 0, 2: 1, 3: 3, 4: 5, 5: 2, 6: 4, 7: 7, 9: 8}
@@ -201,7 +201,7 @@ def listen(host, port, username, password, stop, on_status, on_audio,
                 while not stop.is_set():
                     now = time.monotonic()
                     if now >= deadline:
-                        raise RadioError("KNS audio timed out; check UDP audio port and radio settings")
+                        raise ConnectionLost("KNS audio timed out; check UDP audio port and radio settings")
                     if cat.authenticated and now >= poll:
                         for query in ("FA", "OM0", "NR", "AC", "DD4", "##DD2"):
                             send(query)
@@ -217,7 +217,7 @@ def listen(host, port, username, password, stop, on_status, on_audio,
                         if source is control:
                             data = control.recv(8192)
                             if not data:
-                                raise RadioError("Radio disconnected")
+                                raise ConnectionLost("Radio disconnected")
                             buffer.extend(data)
                             if len(buffer) > 65536:
                                 raise RadioError("Malformed KNS control reply")

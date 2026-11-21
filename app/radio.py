@@ -39,6 +39,10 @@ def encode(value):
     return bytes(result).ljust(16, b"\0")
 
 
+class ConnectionLost(RadioError):
+    """A transient session failure that can be retried without user input."""
+
+
 class Channel:
     def __init__(self, sock, port):
         self.sock = sock
@@ -48,6 +52,12 @@ class Channel:
         self.ready = False
         self.seq = 0
         self.history = OrderedDict()
+        self.received = OrderedDict()
+        self.missing = {}
+        self.rx_seq = None
+        self.closed = False
+        self.track_data = True
+        self.next_repair = 0
         self.next_ping = self.next_idle = self.next_probe = 0
 
     def send(self, kind, seq=0, body=b"", tracked=False):
@@ -57,12 +67,25 @@ class Channel:
         data = HEADER.pack(16 + len(body), kind, seq, self.local, self.remote) + body
         if tracked:
             self.history[seq] = data
-            if len(self.history) > 128:
+            if len(self.history) > 512:
                 self.history.popitem(last=False)
         with suppress(BlockingIOError):
             self.sock.send(data)
 
     def tick(self, now):
+        if self.missing and now >= self.next_repair:
+            requested = []
+            for seq, attempts in tuple(self.missing.items()):
+                if attempts >= 4:
+                    del self.missing[seq]
+                else:
+                    requested.append(seq)
+                    self.missing[seq] += 1
+            if len(requested) == 1:
+                self.send(1, requested[0])
+            elif requested:
+                self.send(1, body=b"".join(struct.pack("<HH", seq, seq) for seq in requested))
+            self.next_repair = now + 0.08
         if not self.ready and now >= self.next_probe:
             if self.remote:
                 self.send(6, 1)
@@ -89,6 +112,8 @@ class Channel:
             self.send(6, 1)
         if self.remote and sender != self.remote:
             return None
+        if size == 16 and kind == 5:
+            self.closed = True
         if size == 16 and kind == 6:
             self.ready = True
         if size == 21 and kind == 7 and data[16] == 0:
@@ -101,8 +126,44 @@ class Channel:
                 if requested_seq in self.history:
                     with suppress(BlockingIOError):
                         self.sock.send(self.history[requested_seq])
+                else:
+                    self.send(0, requested_seq)
             return None
+        if kind == 0 and self.track_data and not (size == 16 and seq == 0):
+            # Some radio packet families reuse an outer sequence. Only identical datagrams are duplicates.
+            placeholder = seq in self.received and self.received[seq] != data
+            if seq in self.received and not placeholder:
+                return None
+            if self.rx_seq is None:
+                gap = seq if seq <= 50 else 0
+                self.missing.update((n, 0) for n in range(gap))
+                self.rx_seq = seq
+            else:
+                distance = (seq - self.rx_seq) & 0xffff
+                if 0 < distance < 32768:
+                    if distance <= 50:
+                        for step in range(1, distance):
+                            self.missing.setdefault((self.rx_seq + step) & 0xffff, 0)
+                    else:
+                        self.missing.clear()
+                    self.rx_seq = seq
+                elif seq not in self.missing and not placeholder:
+                    return None
+            self.missing.pop(seq, None)
+            self.received[seq] = data
+            if len(self.received) > 512:
+                self.received.popitem(last=False)
         return kind, data
+
+    def drain(self):
+        # A bounded batch prevents audio/scope bursts from starving keepalives.
+        for _ in range(64):
+            try:
+                packet = self.receive()
+            except BlockingIOError:
+                return
+            if packet is not None:
+                yield packet
 
 
 def listen(host, port, username, password, stop, on_status, on_audio,
@@ -125,14 +186,16 @@ def listen(host, port, username, password, stop, on_status, on_audio,
 
         def bind():
             sock = stack.enter_context(socket.socket(socket.AF_INET, socket.SOCK_DGRAM))
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1 << 20)
             sock.bind(("", 0))
             return sock
 
-        def connect(sock, remote_port):
+        def connect(sock, remote_port, track_data=True):
             local_port = sock.getsockname()[1]
             sock.connect((address, remote_port))
             sock.setblocking(False)
             channel = Channel(sock, local_port)
+            channel.track_data = track_data
             selector.register(sock, selectors.EVENT_READ, channel)
             return channel
 
@@ -144,9 +207,12 @@ def listen(host, port, username, password, stop, on_status, on_audio,
         auth_seq = 0
         authenticated = login_sent = stream_requested = False
         identities = {}
-        deadline = time.monotonic() + 6
+        deadline = time.monotonic() + 10
         renewal = float("inf")
         last_pcm = None
+        phase_packet = None
+        phase_retry = 0
+        phase_attempts = 0
 
         def request(size, kind):
             nonlocal auth_seq
@@ -166,100 +232,119 @@ def listen(host, port, username, password, stop, on_status, on_audio,
             while not stop.is_set():
                 now = time.monotonic()
                 if now > deadline:
-                    raise RadioError("Audio stream timed out" if audio else "Radio setup timed out")
+                    raise ConnectionLost("Audio stream timed out" if audio else "Radio setup timed out")
                 for channel in (control, cat, audio):
                     if channel:
                         channel.tick(now)
+                if phase_packet is not None and now >= phase_retry and phase_attempts < 2:
+                    # Repeat the same transaction; if the peer cannot replay it, reopen the session.
+                    with suppress(BlockingIOError):
+                        control.sock.send(phase_packet)
+                    phase_attempts += 1
+                    phase_retry = now + 0.8
                 if civ:
                     civ.tick(now)
                 if now >= renewal:
                     send_token(5)
                     renewal = now + 60
-                for key, _ in selector.select(0.05):
+                for key, _ in selector.select(0.01):
                     channel = key.data
-                    packet = channel.receive()
-                    if packet is None:
-                        continue
-                    kind, data = packet
-                    size = len(data)
-                    if channel is audio:
-                        if kind == 0 and size > 24 and (size - 24) % 2 == 0:
-                            declared = struct.unpack_from(">H", data, 22)[0]
-                            if declared != size - 24:
+                    for kind, data in channel.drain():
+                        size = len(data)
+                        if channel is audio:
+                            if kind == 0 and size > 24 and (size - 24) % 2 == 0:
+                                declared = struct.unpack_from(">H", data, 22)[0]
+                                if declared != size - 24:
+                                    continue
+                                sequence = struct.unpack_from(">H", data, 18)[0]
+                                if last_pcm is not None and not 0 < (sequence - last_pcm) % 65536 < 32768:
+                                    continue
+                                if last_pcm is None:
+                                    on_status("Receiving audio")
+                                last_pcm = sequence
+                                deadline = time.monotonic() + 10
+                                on_audio(data[24:])
+                            continue
+                        if channel is cat:
+                            if kind == 0:
+                                civ.receive(data)
+                            continue
+                        if kind == 6 and size == 16 and not login_sent:
+                            on_status("Signing in")
+                            body = request(128, 0)
+                            body[48:64], body[64:80], body[80:88] = user, secret, CLIENT
+                            control.send(0, body=body, tracked=True)
+                            login_sent = True
+                            phase_packet = control.history[(control.seq - 1) & 0xffff]
+                            phase_retry = now + 0.8
+                            phase_attempts = 0
+                            deadline = now + 3
+                        if size == 16 and kind == 5:
+                            raise ConnectionLost("Radio disconnected")
+                        if kind != 0:
+                            continue
+                        if size == 96 and login_sent and not authenticated:
+                            if struct.unpack_from("<H", data, 26)[0] != request_id:
                                 continue
-                            sequence = struct.unpack_from(">H", data, 18)[0]
-                            if last_pcm is not None and not 0 < (sequence - last_pcm) % 65536 < 32768:
-                                continue
-                            if last_pcm is None:
-                                on_status("Receiving audio")
-                            last_pcm = sequence
-                            deadline = time.monotonic() + 6
-                            on_audio(data[24:])
-                        continue
-                    if channel is cat:
-                        if kind == 0:
-                            civ.receive(data)
-                        continue
-                    if kind == 6 and size == 16 and not login_sent:
-                        on_status("Signing in")
-                        body = request(128, 0)
-                        body[48:64], body[64:80], body[80:88] = user, secret, CLIENT
-                        control.send(0, body=body, tracked=True)
-                        login_sent = True
-                    if kind != 0:
-                        continue
-                    if size == 96 and login_sent and not authenticated:
-                        error = int.from_bytes(data[48:52], "big")
-                        if error:
-                            raise RadioError("Radio rejected the login")
-                        if struct.unpack_from("<H", data, 26)[0] == request_id:
-                            token = data[28:32]
-                            authenticated = True
-                            send_token(2)
-                            renewal = now + 60
-                    if size >= 168 and (size - 66) % 102 == 0:
-                        for offset in range(66, size, 102):
-                            name = data[offset + 16:offset + 48].split(b"\0", 1)[0]
-                            radio_address = data[offset + 82]
-                            profile = find_icom(name.decode("ascii", "replace"), radio_address, model)
-                            if profile:
-                                identity = data[offset:offset + 16]
-                                if identity[7:9] == b"\x10\x80":
-                                    identity = b"\0" * 7 + identity[7:9] + b"\0" + identity[10:]
-                                identities[identity] = (name, radio_address, profile)
-                        if not identities:
-                            raise RadioError("Radio model not recognized; choose it in Setup")
-                        if len(identities) != 1:
-                            raise RadioError("More than one radio found; choose a model in Setup")
-                    if authenticated and identities and not stream_requested:
-                        identity, (name, civ_address, profile) = next(iter(identities.items()))
-                        on_state("model", profile["model"])
-                        on_state("profile", profile)
-                        body = request(144, 3)
-                        body[16:32] = identity
-                        body[48:48 + len(name)] = name
-                        body[80:96] = user
-                        # RX enabled, TX disabled, mono signed 16-bit PCM.
-                        body[96:100] = b"\x01\x00\x04\x00"
-                        struct.pack_into(">IIIII", body, 100, RATE, 0,
-                                         cat_sock.getsockname()[1], audio_sock.getsockname()[1], 0)
-                        body[120] = 1
-                        control.send(0, body=body, tracked=True)
-                        on_status("Opening RX stream")
-                        stream_requested = True
-                        deadline = now + 6
-                    if size == 80 and stream_requested:
-                        if data[64] == 1:
-                            raise RadioError("Radio disconnected")
-                        if data[48:52] != b"\0" * 4:
-                            raise RadioError("Radio refused RX stream")
-                        if audio is None:
-                            cat_port, audio_port = struct.unpack_from(">H2xH", data, 66)
-                            if cat_port and audio_port:
-                                cat = connect(cat_sock, cat_port)
-                                audio = connect(audio_sock, audio_port)
-                                civ = Civ(cat, civ_address or profile["civ"], on_frequency, on_scope, take_tune,
-                                          take_commands, on_state, profile)
+                            error = int.from_bytes(data[48:52], "big")
+                            if error:
+                                raise RadioError("Radio rejected the login")
+                            if struct.unpack_from("<H", data, 26)[0] == request_id:
+                                token = data[28:32]
+                                authenticated = True
+                                phase_packet = None
+                                send_token(2)
+                                renewal = now + 60
+                        if size >= 168 and (size - 66) % 102 == 0:
+                            for offset in range(66, size, 102):
+                                name = data[offset + 16:offset + 48].split(b"\0", 1)[0]
+                                radio_address = data[offset + 82]
+                                profile = find_icom(name.decode("ascii", "replace"), radio_address, model)
+                                if profile:
+                                    identity = data[offset:offset + 16]
+                                    if identity[7:9] == b"\x10\x80":
+                                        identity = b"\0" * 7 + identity[7:9] + b"\0" + identity[10:]
+                                    identities[identity] = (name, radio_address, profile)
+                            if not identities:
+                                raise RadioError("Radio model not recognized; choose it in Setup")
+                            if len(identities) != 1:
+                                raise RadioError("More than one radio found; choose a model in Setup")
+                        if authenticated and identities and not stream_requested:
+                            identity, (name, civ_address, profile) = next(iter(identities.items()))
+                            on_state("model", profile["model"])
+                            on_state("profile", profile)
+                            body = request(144, 3)
+                            body[16:32] = identity
+                            body[48:48 + len(name)] = name
+                            body[80:96] = user
+                            # RX enabled, TX disabled, mono signed 16-bit PCM.
+                            body[96:100] = b"\x01\x00\x04\x00"
+                            struct.pack_into(">IIIII", body, 100, RATE, 0,
+                                             cat_sock.getsockname()[1], audio_sock.getsockname()[1], 0)
+                            body[120] = 1
+                            control.send(0, body=body, tracked=True)
+                            on_status("Opening RX stream")
+                            stream_requested = True
+                            phase_packet = control.history[(control.seq - 1) & 0xffff]
+                            phase_retry = now + 0.8
+                            phase_attempts = 0
+                            deadline = now + 3
+                        if size == 64 and authenticated and data[20] == 2 and data[21] == 5:
+                            if data[48:52] != b"\0" * 4:
+                                raise ConnectionLost("Radio session expired")
+                        if size == 80 and stream_requested:
+                            if data[64] == 1:
+                                raise ConnectionLost("Radio disconnected")
+                            if data[48:52] != b"\0" * 4:
+                                raise ConnectionLost("Radio refused RX stream")
+                            if audio is None:
+                                cat_port, audio_port = struct.unpack_from(">H2xH", data, 66)
+                                if cat_port and audio_port:
+                                    cat = connect(cat_sock, cat_port)
+                                    audio = connect(audio_sock, audio_port, track_data=False)
+                                    phase_packet = None
+                                    civ = Civ(cat, civ_address or profile["civ"], on_frequency, on_scope, take_tune,
+                                              take_commands, on_state, profile)
         finally:
             if civ:
                 with suppress(OSError):
@@ -267,7 +352,19 @@ def listen(host, port, username, password, stop, on_status, on_audio,
             if authenticated:
                 with suppress(OSError):
                     send_token(1)
-            for channel in (audio, cat, control):
-                if channel and channel.remote:
+            channels = [channel for channel in (audio, cat, control) if channel and channel.remote]
+            until = time.monotonic() + 0.7
+            next_bye = 0
+            while channels and time.monotonic() < until:
+                now = time.monotonic()
+                if now >= next_bye:
+                    for channel in channels:
+                        with suppress(OSError):
+                            channel.send(5)
+                    next_bye = now + 0.2
+                for key, _ in selector.select(0.02):
                     with suppress(OSError):
-                        channel.send(5)
+                        for _ in key.data.drain():
+                            pass
+                if control.closed:
+                    break
