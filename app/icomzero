@@ -737,6 +737,7 @@ def ft8_frame(
     meters=None,
     power_set=10,
     fault=None,
+    auto_active=False,
 ):
     image = Image.new("RGB", (WIDTH, HEIGHT), BG)
     draw = ImageDraw.Draw(image)
@@ -801,6 +802,8 @@ def ft8_frame(
         font=display.fonts["small"],
         fill=WHITE if transmitting else MUTED,
     )
+    if auto_active:
+        draw.text((187, 152), "AUTO", font=display.fonts["small"], fill="#f06464")
     now = time.monotonic()
 
     def fresh(name):
@@ -915,6 +918,7 @@ def ft8_ui(lcd, keyboard):
     menu_items = [
         "Bands",
         "Call CQ",
+        "Auto CQ",
         "Settings",
         "Stop Transmit",
         "Logging",
@@ -940,6 +944,7 @@ def ft8_ui(lcd, keyboard):
             ("TX level %", "tx_level"),
             ("TX power W", "tx_power_w"),
             ("CQ period", "cq_period"),
+            ("QSO beep", "qso_beep"),
         ],
         "wavelog": [
             ("API URL", "wavelog_url"),
@@ -1126,6 +1131,8 @@ def ft8_ui(lcd, keyboard):
                         items = list(menu_items) if panel == "menu" else log_items
                         if panel == "menu" and history.current() is not None:
                             items[1] = "Reply / continue"
+                        if panel == "menu" and getattr(station, "auto_active", False):
+                            items[2] = "Stop Auto CQ"
                     elif panel == "help":
                         items = [
                             "F / Fn+F: previous decode",
@@ -1209,6 +1216,7 @@ def ft8_ui(lcd, keyboard):
                         (time.time() % 15) / 15 if transmitting else progress,
                         transmitting,
                         armed=station.active,
+                        auto_active=getattr(station, "auto_active", False),
                         meters=rx.radio_state,
                         power_set=int(settings["tx_power_w"]),
                         fault=rx.radio_state.get("tx_fault"),
@@ -1346,6 +1354,15 @@ def ft8_ui(lcd, keyboard):
                                 else:
                                     station.action("cq", dial=dial)
                                     notify("Calling CQ on next transmit period")
+                                panel = None
+                            elif action == "Auto CQ":
+                                if getattr(station, "auto_active", False):
+                                    stop_tx()
+                                    notify("Auto CQ stopped")
+                                else:
+                                    station.action("auto_cq", dial=dial)
+                                    history.follow_bottom()
+                                    notify("Auto CQ: up to 4 unanswered calls")
                                 panel = None
                             elif action == "Settings":
                                 stop_tx()

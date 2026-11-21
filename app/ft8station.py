@@ -9,6 +9,8 @@ import threading
 import time
 from ft8qso import Sequencer, waveform, finalize_contact
 from ft8log import load_settings, directory
+from ft8auto import AutoCQ, SessionLog
+from notifications import Sounds
 
 
 def clock_health():
@@ -127,18 +129,61 @@ class Station:
         self.qso_revision = 0
         self.saved_qso = None
         self.sequence = Sequencer(load_settings(), self.complete_contact)
+        self.journal = None
+        self.auto = AutoCQ(self.sequence, self.audit)
+        self.sounds = Sounds(
+            lambda: receiver.radio_state.get("ptt") is False
+            and not receiver.radio_state.get("ptt_pending")
+        )
         self.thread = threading.Thread(target=self.run, daemon=True)
         self.thread.start()
+
+    @property
+    def auto_active(self):
+        return self.auto.active
+
+    def audit(self, event, **fields):
+        if self.journal is None:
+            raise OSError("Auto CQ journal unavailable")
+        self.journal.emit(event, **fields)
+
+    def settle_auto(self):
+        try:
+            self.auto.synchronize()
+            if self.journal is not None:
+                if self.auto.active:
+                    self.journal.flush()
+                else:
+                    self.journal.close()
+                    self.journal = None
+                    if self.auto.finished_no_response:
+                        self.sounds.play("auto_stop")
+        except OSError:
+            self.receiver.stop_tx()
+            self.sequence.stop("Auto CQ log failed; TX stopped")
+            self.auto.active = False
+            self.sequence.repeat_limit = 5
+            self.sequence.timeout_seconds = 180
+            if self.journal is not None:
+                try:
+                    self.journal.close()
+                except OSError:
+                    pass
+                self.journal = None
 
     def complete_contact(self, qso):
         added = self.logbook.add(qso)
         if added is not False:
             self.saved_qso = dict(qso)
             self.qso_revision += 1
+            if getattr(self, "sounds", None):
+                self.sounds.play("qso")
+        if getattr(self, "auto", None) and self.auto.active:
+            self.auto.record("qso_saved", qso=dict(qso), newly_saved=added is not False)
         return added
 
     def action(self, action, value=None, dial=7074000):
-        if action in ("cq", "reply") and self.tuning:
+        if action in ("cq", "reply", "auto_cq") and self.tuning:
             self.status = "Wait for automatic tuning"
             return
         self.version += 1
@@ -152,7 +197,7 @@ class Station:
             self.active = False
             self.tuning = False
             self.status = "Transmit stopped"
-        elif action in ("cq", "reply"):
+        elif action in ("cq", "reply", "auto_cq"):
             self.active = True
 
     def run(self):
@@ -166,6 +211,7 @@ class Station:
         logged_fault = None
         deferred_tx = []
         power_summary_at = 0
+        audit_at = 0
         last_wall, last_mono = time.time(), time.monotonic()
         while not self.closed.wait(0.03):
             wall, mono = time.time(), time.monotonic()
@@ -188,6 +234,16 @@ class Station:
                     (pending[3] + 1, pending[3], self.sequence.hz, pending[2])
                 )
                 job.listed = True
+                if self.auto.active:
+                    try:
+                        self.auto.record(
+                            "tx_audio_started",
+                            text=pending[2],
+                            tx_slot=pending[3],
+                            observed_wall=time.time(),
+                        )
+                    except OSError:
+                        self.receiver.stop_tx()
             for item in deferred_tx[:]:
                 if time.time() >= item[0] * 15:
                     self.decoder.record_tx(item[1], item[2], item[3])
@@ -198,8 +254,12 @@ class Station:
                     if current != self.version:
                         continue
                     version = current
+                    if self.auto.active:
+                        self.auto.stop("Operator action: " + action)
+                    self.settle_auto()
                     self.sequence.stop()
                     job = pending = None
+                    cache.clear()
                     if action == "stop":
                         self.tuning = False
                         continue
@@ -246,7 +306,15 @@ class Station:
                     if not self.receiver.busy() or self.receiver.frequency != dial:
                         raise ValueError("Wait for the radio connection")
                     self.sequence.settings = load_settings()
-                    if action == "cq":
+                    if action == "auto_cq":
+                        self.journal = SessionLog()
+                        self.auto.start(dial)
+                        self.auto.record(
+                            "radio_ready",
+                            model=profile.get("model"),
+                            clock=self.clock_status,
+                        )
+                    elif action == "cq":
                         self.sequence.cq(dial)
                     elif action == "reply":
                         self.sequence.reply(value, dial, self.decoder.snapshot()[0])
@@ -336,18 +404,33 @@ class Station:
                     self.receiver.command("tx_fault", "Automatic tuner timed out")
                     self.tuning = False
                     self.sequence.stop("Automatic tuner timed out")
-            if self.sequence.enabled and time.time() - self.sequence.start > 180:
+            self.settle_auto()
+            if (
+                self.sequence.enabled
+                and not self.auto.active
+                and time.time() - self.sequence.start > 180
+            ):
                 self.receiver.stop_tx()
                 self.sequence.stop("Contact timed out")
             if self.sequence.enabled:
                 try:
                     for message in self.decoder.snapshot()[0]:
-                        self.sequence.receive(message)
+                        (
+                            self.auto.receive
+                            if self.auto.active
+                            else self.sequence.receive
+                        )(message)
                 except Exception as error:
                     self.receiver.stop_tx()
                     self.sequence.stop("Contact/log error: " + type(error).__name__)
                 if job is not None and job.done.is_set():
-                    self.sequence.transmitted(pending, job.success)
+                    try:
+                        if self.auto.active:
+                            self.auto.transmitted(pending, job.success, job.error)
+                        else:
+                            self.sequence.transmitted(pending, job.success)
+                    except OSError:
+                        self.receiver.stop_tx()
                     if not job.success:
                         self.sequence.status = job.error or "Transmit stopped"
                         record_fault(self.receiver, self.sequence.status, job)
@@ -364,7 +447,13 @@ class Station:
                         try:
                             cache[key] = waveform(*key)
                             if len(cache) > 12:
-                                cache = {key: cache[key]}
+                                # Auto CQ may resume from next() at the slot
+                                # boundary. Keep its prebuilt CQ across partners.
+                                cache = {
+                                    k: pcm
+                                    for k, pcm in cache.items()
+                                    if k == key or k[0].startswith("CQ ")
+                                }
                         except Exception as error:
                             self.receiver.stop_tx()
                             self.sequence.stop("Encoder error: " + type(error).__name__)
@@ -378,7 +467,19 @@ class Station:
                         previous_decoded == int(time.time() // 15) - 1
                         or self.sequence.last_sent_slot is None
                     )
-                    pending = self.sequence.next() if phase_ready else None
+                    try:
+                        pending = (
+                            (
+                                self.auto.next
+                                if self.auto.active
+                                else self.sequence.next
+                            )()
+                            if phase_ready
+                            else None
+                        )
+                    except OSError:
+                        self.receiver.stop_tx()
+                        pending = None
                     if pending:
                         try:
                             key = (
@@ -405,11 +506,43 @@ class Station:
                     and time.monotonic() - prepared_at > 8
                 ):
                     self.sequence.stop("LAN modulation setup not confirmed")
+            if self.auto.active and mono >= audit_at:
+                audit_at = mono + 1
+                try:
+                    state = self.receiver.radio_state
+                    self.auto.record(
+                        "station_status",
+                        clock_ok=self.clock_ok,
+                        frequency_hz=self.receiver.frequency,
+                        status=self.sequence.status,
+                        radio={
+                            k: state.get(k)
+                            for k in (
+                                "ptt",
+                                "ptt_pending",
+                                "tx_ready",
+                                "tx_fault",
+                                "swr",
+                                "alc",
+                                "watts",
+                                "tx_power",
+                            )
+                        },
+                        logging_status=self.logbook.status,
+                    )
+                except (OSError, AttributeError):
+                    self.receiver.stop_tx()
+                    self.sequence.stop("Auto CQ diagnostics failed; TX stopped")
+            self.settle_auto()
             self.active = self.sequence.enabled
             self.status = self.sequence.status
         self.receiver.stop_tx()
+        if self.auto.active:
+            self.sequence.stop("Application closed")
+        self.settle_auto()
 
     def close(self):
         self.action("stop")
         self.closed.set()
         self.thread.join(timeout=1)
+        self.sounds.close()

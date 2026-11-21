@@ -26,6 +26,7 @@ DEFAULTS = {
     "tx_level": "50",
     "tx_power_w": "10",
     "cq_period": "Even",
+    "qso_beep": True,
     "wavelog_url": "",
     "wavelog_key": "",
     "wavelog_station": "",
@@ -91,7 +92,7 @@ def request(url, data, form=False):
                 "application/x-www-form-urlencoded" if form else "application/json"
             ),
             "Accept": "application/json",
-            "User-Agent": "ICOMzero/0.8.0",
+            "User-Agent": "ICOMzero/0.9.0",
         },
     )
     with urllib.request.urlopen(req, timeout=10) as response:

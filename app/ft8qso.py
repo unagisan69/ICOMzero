@@ -166,6 +166,8 @@ class Sequencer:
         self.settings = dict(settings)
         self.complete = complete
         self.enabled = False
+        self.repeat_limit = 5
+        self.timeout_seconds = 180
         self.partner = ""
         self.grid = ""
         self.sent = None
@@ -367,7 +369,9 @@ class Sequencer:
         now = time.time() if now is None else now
         if not self.enabled or self.pending:
             return None
-        if now - self.start > 180 or self.repeats >= 5:
+        if (
+            self.timeout_seconds is not None and now - self.start > self.timeout_seconds
+        ) or (self.repeat_limit is not None and self.repeats >= self.repeat_limit):
             self.stop("Contact timed out")
             return None
         slot = int(now // 15)

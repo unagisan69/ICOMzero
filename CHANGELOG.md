@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.0 — 2026-11-21
+
+- Add explicitly started Auto CQ: four unanswered CQs, four unanswered attempts per contact stage, then resume CQ after a completed contact or an abandoned attempt. Wait for the final receive opportunity before stopping.
+- Show AUTO while running; Stop Auto CQ, Stop Transmit, exit, band/settings changes and RF/clock/connection faults cancel the session.
+- Keep private per-session JSONL journals of received decodes, transmitted messages, timing, frequencies, reports, state decisions, meters, logging status and stop reasons.
+- Play a short completion beep for newly saved QSOs, with a saved QSO beep setting, and a distinct sound when Auto CQ stops after four unanswered calls. FT8 receive audio remains muted.
+
 ## 0.8.0 — 2026-11-21
 
 - Reveal local TX rows after the complete 15-second period, show a red armed dot, and animate the UTC progress bar in red while transmitting.

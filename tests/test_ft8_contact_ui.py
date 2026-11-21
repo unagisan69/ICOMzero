@@ -300,7 +300,7 @@ class PowerAndDisplay(unittest.TestCase):
             }
         )
         image = module["ft8_frame"](
-            display, History(), "K1ABC", True, "", 0.5, transmitting=True, armed=True
+            display, History(), "K1ABC", True, "", 0.5, transmitting=True, armed=True, auto_active=True
         )
         self.assertEqual(image.getpixel((30, 147)), (240, 100, 100))
         self.assertEqual(image.getpixel((18, 161)), (240, 100, 100))
@@ -309,7 +309,7 @@ class PowerAndDisplay(unittest.TestCase):
 
 
 class SelectedMenus(unittest.TestCase):
-    def run_menu(self, manual=False):
+    def run_menu(self, manual=False, auto=False):
         from PIL import ImageFont
 
         module = runpy.run_path(
@@ -377,7 +377,7 @@ class SelectedMenus(unittest.TestCase):
             def close(self):
                 pass
 
-        keys = [33, 15] + ([45] * 5 if manual else [45]) + [28]
+        keys = [33, 15] + ([45] * 6 if manual else [45] * (2 if auto else 1)) + [28]
         if manual:
             keys += [45] * 4 + [28]
         keys += [1]
@@ -422,4 +422,9 @@ class SelectedMenus(unittest.TestCase):
             (record[1]["call"], record[1]["sent"], record[1]["received"]),
             ("W1AW", -12, -10),
         )
+        self.assertFalse(any(args[0] in ("cq", "reply") for args, _ in actions))
+
+    def test_auto_cq_beneath_call_cq_ignores_highlight(self):
+        actions, _ = self.run_menu(auto=True)
+        self.assertTrue(any(args[0] == "auto_cq" for args, _ in actions))
         self.assertFalse(any(args[0] in ("cq", "reply") for args, _ in actions))
