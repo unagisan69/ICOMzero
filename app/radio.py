@@ -289,7 +289,9 @@ def listen(
                     phase_retry = now + 0.8
                 if pacer:
                     pacer.tick()
-                    if pacer.armed:
+                    if pacer.armed or (
+                        civ and (civ.tuning_requested or civ.tuner_state == 2)
+                    ):
                         deadline = now + 10
                 if civ:
                     civ.tick(now)
@@ -481,6 +483,7 @@ def listen(
                                             civ.tx_ready,
                                             lambda: civ.ptt_state,
                                             lambda value: on_state("tx_status", value),
+                                            protection=civ.protection.check,
                                         )
         finally:
             if pacer:

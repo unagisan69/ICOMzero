@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.7.0 — 2026-11-21
+
+- Clear decode selection after replying or scrolling to the newest row; resume following new decodes.
+- Distinguish TX armed from active RF, show fresh calibrated SWR/output watts, and add blue local TX records to history.
+- Add private nominal RF power settings (10 W default), confirmed application and prior-power restoration.
+- Start the antenna tuner on FT8 entry/band changes after frequency and power confirmation; add Tune antenna and Clear warning menu actions.
+- Stop and latch a warning for SWR above 2.0, excessive/sustained ALC, or missing telemetry. Internal tuner carriers use SWR protection, with no external-audio ALC test.
+- Prevent stale tuner-start replay and prevent transmission while a fault or tuning operation is active.
+- Remove the home tagline.
+
 ## 0.6.0 — 2026-11-21
 
 - Show eleven smaller FT8 rows with spectral SNR estimates, CQ/own-call filtering, own-call highlighting and stable line selection.

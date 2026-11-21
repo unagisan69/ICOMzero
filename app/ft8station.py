@@ -55,6 +55,10 @@ class Station:
         self.version = 0
         self.status = "Receive only"
         self.active = False
+        self.tuning = False
+        self.tune_phase = None
+        self.tune_issued = None
+        self.tune_deadline = 0
         self.clock_status = "Checking clock"
         self.clock_ok = False
         self.sequence = Sequencer(load_settings(), logbook.add)
@@ -62,12 +66,22 @@ class Station:
         self.thread.start()
 
     def action(self, action, value=None, dial=7074000):
+        if action in ("cq", "reply") and self.tuning:
+            self.status = "Wait for automatic tuning"
+            return
         self.version += 1
         self.receiver.stop_tx()
+        if action in ("stop", "tune"):
+            self.receiver.command("tuner_stop")
         self.commands.put((self.version, action, value, dial))
+        if action == "tune":
+            self.tuning = True
         if action == "stop":
             self.active = False
+            self.tuning = False
             self.status = "Transmit stopped"
+        elif action in ("cq", "reply"):
+            self.active = True
 
     def run(self):
         version = 0
@@ -98,6 +112,31 @@ class Station:
                     self.sequence.stop()
                     job = pending = None
                     if action == "stop":
+                        self.tuning = False
+                        continue
+                    if action == "clear_fault":
+                        self.receiver.command("clear_fault")
+                        self.status = "Warning cleared"
+                        self.sequence.status = self.status
+                        continue
+                    if self.receiver.radio_state.get("tx_fault"):
+                        raise ValueError("Clear the RF warning in Menu first")
+                    if action == "tune":
+                        self.tuning = False
+                        profile = self.receiver.radio_state.get("profile", {})
+                        if not (profile.get("tuner") and profile.get("transmit")):
+                            self.sequence.status = "Automatic tuner unavailable"
+                            continue
+                        if self.receiver.frequency != dial:
+                            raise ValueError("Wait for band readback")
+                        self.receiver.command(
+                            "ft8_power", int(load_settings()["tx_power_w"])
+                        )
+                        self.tuning = True
+                        self.tune_phase = "power"
+                        self.tune_issued = None
+                        self.tune_deadline = time.monotonic() + 25
+                        self.sequence.status = "Preparing automatic tuner"
                         continue
                     self.clock_ok, self.clock_status = clock_health()
                     if not self.clock_ok:
@@ -112,6 +151,9 @@ class Station:
                         self.sequence.cq(dial)
                     elif action == "reply":
                         self.sequence.reply(value, dial)
+                    self.receiver.command(
+                        "ft8_power", int(self.sequence.settings["tx_power_w"])
+                    )
                     self.receiver.command("ft8_prepare")
                     prepared_at = time.monotonic()
             except queue.Empty:
@@ -128,6 +170,51 @@ class Station:
             ):
                 self.receiver.stop_tx()
                 self.sequence.stop("Radio disconnected")
+            if (
+                job is not None
+                and job.started.is_set()
+                and not getattr(job, "listed", False)
+            ):
+                self.decoder.record_tx(pending[3], self.sequence.hz, pending[2])
+                job.listed = True
+            fault = self.receiver.radio_state.get("tx_fault")
+            if fault:
+                self.receiver.stop_tx()
+                self.sequence.stop(fault)
+                self.tuning = False
+            if self.tuning:
+                now = time.monotonic()
+                if (
+                    self.tune_phase == "power"
+                    and self.receiver.radio_state.get("power_ready")
+                    and not self.receiver.radio_state.get("ptt")
+                    and not self.receiver.radio_state.get("ptt_pending")
+                ):
+                    self.receiver.command("tuner")
+                    self.tune_issued = now
+                    self.tune_phase = "running"
+                    self.sequence.status = "Auto-tuning antenna"
+                elif self.tune_phase == "running" and now - self.tune_issued > 0.8:
+                    tuner = self.receiver.radio_state.get("tuner")
+                    fresh = (
+                        self.receiver.radio_state.get("tuner_at", 0) > self.tune_issued
+                    )
+                    if (
+                        fresh
+                        and tuner == 1
+                        and not self.receiver.radio_state.get("ptt")
+                    ):
+                        self.tuning = False
+                        self.sequence.status = "Antenna tuner ready"
+                    elif fresh and tuner == 0 and now - self.tune_issued > 2:
+                        self.receiver.command("tx_fault", "Automatic tuner failed")
+                        self.tuning = False
+                        self.sequence.status = "Automatic tuner failed"
+                if self.tuning and now > self.tune_deadline:
+                    self.receiver.command("tuner_stop")
+                    self.receiver.command("tx_fault", "Automatic tuner timed out")
+                    self.tuning = False
+                    self.sequence.stop("Automatic tuner timed out")
             if self.sequence.enabled and time.time() - self.sequence.start > 180:
                 self.receiver.stop_tx()
                 self.sequence.stop("Contact timed out")
@@ -165,7 +252,10 @@ class Station:
                             if version != self.version or self.closed.is_set():
                                 continue
                             job = self.receiver.queue_tx(
-                                cache[key], pending[3] * 15 + 0.5, self.sequence.dial
+                                cache[key],
+                                pending[3] * 15 + 0.5,
+                                self.sequence.dial,
+                                message=pending[2],
                             )
                         except Exception as error:
                             self.receiver.stop_tx()

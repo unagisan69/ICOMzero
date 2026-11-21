@@ -11,6 +11,7 @@ import struct
 import sys
 import time
 
+from meters import Protection
 from models import PROFILES
 from radio import RadioError, ConnectionLost
 
@@ -83,6 +84,14 @@ class Cat:
             on_scope,
             on_state,
         )
+        self.protection = Protection(PROFILE, on_state)
+        self.fault_applied = False
+        self.tuning_requested = False
+        self.tuner_state = None
+        self.tune_started = None
+        self.original_power = self.current_power = None
+        self.requested_power = self.power_target = None
+        self.meters_subscribed = False
         self.tx_enabled = tx_enabled
         self.frequency = self.mode = None
         self.controls = {}
@@ -149,6 +158,31 @@ class Cat:
         ):
             self.controls[command[:2]] = int(command[2:])
             self.original_controls.setdefault(command[:2], int(command[2:]))
+        elif self.tx_enabled and command.startswith("PC") and command[2:].isdigit():
+            self.current_power = int(command[2:])
+            if self.original_power is None:
+                self.original_power = self.current_power
+            self.on_state(
+                "power_ready",
+                self.power_target is not None
+                and self.current_power == self.power_target,
+            )
+        elif (
+            self.tx_enabled
+            and len(command) == 7
+            and command[:3] in ("RM1", "RM2")
+            and command[3:].isdigit()
+        ):
+            self.protection.update(
+                "alc" if command[2] == "1" else "swr", int(command[3:])
+            )
+        elif (
+            self.tx_enabled
+            and command.startswith("SM")
+            and command[2:].isdigit()
+            and (self.ptt_state or self.tuning_requested)
+        ):
+            self.protection.update("watts", int(command[2:]))
         elif command.startswith("NR") and command[2:] in ("0", "1", "2"):
             self.nr = int(command[2:]) != 0
             if self.pending_nr:
@@ -157,7 +191,18 @@ class Cat:
             self.on_state("nr", self.nr)
         elif command.startswith("AC") and len(command) == 5 and command[2:].isdigit():
             state = 2 if command[-1] != "0" else int(command[-2] != "0")
+            self.tuner_state = state
             self.on_state("tuner", state)
+            self.on_state("tuner_at", time.monotonic())
+            if (
+                self.tuning_requested
+                and self.tune_started
+                and time.monotonic() - self.tune_started > 0.6
+                and state != 2
+                and not self.ptt_state
+            ):
+                self.tuning_requested = False
+                self.protection.started = None
         elif (
             command.startswith("DD0")
             and command[3:].isdigit()
@@ -227,6 +272,9 @@ class Cat:
 
     def ptt(self, enabled):
         if self.tx_enabled:
+            enabled = enabled and not self.protection.fault
+            if enabled:
+                self.protection.begin()
             self.send("TX0" if enabled else "RX")
             self.ptt_pending = True
             self.on_state("ptt_pending", True)
@@ -236,6 +284,10 @@ class Cat:
         return (
             self.tx_enabled
             and self.prepared
+            and not self.protection.fault
+            and not self.tuning_requested
+            and self.tuner_state != 2
+            and (self.power_target is None or self.current_power == self.power_target)
             and self.sources.get("MS0") == 3
             and self.sources.get("MS1") == 3
             and self.frequency == dial
@@ -244,6 +296,42 @@ class Cat:
         )
 
     def tx_poll(self):
+        if not self.meters_subscribed:
+            self.send("RM11")
+            self.send("RM21")
+            self.meters_subscribed = True
+        self.send("PC")
+        if (
+            self.requested_power is not None
+            and self.original_power is not None
+            and not self.ptt_state
+            and not self.ptt_pending
+            and not self.tuning_requested
+            and self.tuner_state != 2
+        ):
+            if not 5 <= self.requested_power <= 100:
+                self.protection.trip("Power must be 5–100 W")
+            elif self.current_power != self.requested_power:
+                self.power_target = self.requested_power
+                self.send(f"PC{self.power_target:03d}")
+            else:
+                self.power_target = self.requested_power
+            self.on_state("power_ready", self.current_power == self.power_target)
+        if self.ptt_state or self.tuning_requested or self.tuner_state == 2:
+            self.send("RM")
+            self.send("SM")
+            self.send("AC")
+        reason = (
+            self.protection.check()
+            if self.ptt_state or self.tuning_requested or self.tuner_state == 2
+            else None
+        )
+        if reason and not self.fault_applied:
+            self.fault_applied = True
+            self.tuning_requested = False
+            self.ptt(False)
+            self.send("AC100")
+
         if (
             self.preparing
             and not self.prepared
@@ -262,19 +350,51 @@ class Cat:
         self.on_state("tx_ready", self.tx_ready(self.frequency))
 
     def action(self, action, value):
-        if action == "ft8_prepare" and self.tx_enabled:
+        if (
+            action == "clear_fault"
+            and self.tx_enabled
+            and not self.ptt_state
+            and self.tuner_state != 2
+        ):
+            self.protection.clear()
+            self.fault_applied = False
+        elif action == "tx_fault" and self.tx_enabled:
+            self.protection.trip(str(value))
+        elif action == "ft8_power" and self.tx_enabled:
+            self.requested_power = int(value)
+            self.power_target = None
+            self.on_state("power_ready", False)
+        elif action == "tuner_stop" and self.tx_enabled:
+            self.tuning_requested = False
+            self.ptt(False)
+            self.send("AC100")
+        elif action == "ft8_prepare" and self.tx_enabled:
             self.preparing = True
         elif action == "mode" and value in MODE_FROM_ICOM:
             self.send(f"OM0{MODE_FROM_ICOM[value]}")
         elif action == "nr":
             self.toggle_noise()
-        elif action == "tuner":
+        elif action == "tuner" and not self.protection.fault:
+            self.tuning_requested = self.tx_enabled
+            self.tune_started = time.monotonic()
+            if self.tx_enabled:
+                self.protection.begin(tuning=True)
+                self.on_state("tune_started", self.tune_started)
             self.send("AC111")
 
     def close(self):
         if self.tx_enabled:
+            if self.tuning_requested or self.tuner_state == 2:
+                self.send("AC100")
             self.ptt(False)
-            if self.prepared:
+            confirmed_rx = self.ptt_state is False and self.tuner_state != 2
+            if (
+                confirmed_rx
+                and self.original_power is not None
+                and self.requested_power is not None
+            ):
+                self.send(f"PC{self.original_power:03d}")
+            if self.prepared and confirmed_rx:
                 for source, value in self.original_sources.items():
                     self.send(f"{source}{value:02d}")
                 for query, value in self.original_controls.items():
@@ -361,6 +481,7 @@ def listen(
                     lambda: cat.ptt_state,
                     lambda value: on_state("tx_status", value),
                     16000,
+                    protection=cat.protection.check,
                 )
             on_status("Signing in")
             send("##CN")
@@ -369,7 +490,7 @@ def listen(
                     now = time.monotonic()
                     if pacer and cat.authenticated:
                         pacer.tick()
-                        if pacer.armed:
+                        if pacer.armed or cat.tuning_requested or cat.tuner_state == 2:
                             deadline = now + 6
                     if now >= deadline:
                         raise ConnectionLost(
@@ -390,7 +511,12 @@ def listen(
                         if (
                             pending_tune is not None
                             and 30_000 <= pending_tune <= 74_800_000
-                            and not (cat.ptt_state or cat.ptt_pending)
+                            and not (
+                                cat.ptt_state
+                                or cat.ptt_pending
+                                or cat.tuning_requested
+                                or cat.tuner_state == 2
+                            )
                         ):
                             send(f"FA{pending_tune:011d}")
                             pending_tune = None

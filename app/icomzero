@@ -241,13 +241,13 @@ class Receiver:
             job, self.tx_job = self.tx_job, None
             return job
 
-    def queue_tx(self, pcm, start, dial):
+    def queue_tx(self, pcm, start, dial, message=""):
         from ft8tx import Job
         if not self.busy() or not self.tx_enabled:
             raise RadioError("Radio is not ready to transmit")
-        if "ptt" not in self.radio_state or self.radio_state.get("ptt") or self.radio_state.get("ptt_pending"):
+        if "ptt" not in self.radio_state or self.radio_state.get("ptt") or self.radio_state.get("ptt_pending") or self.radio_state.get("tuner")==2:
             raise RadioError("Wait for confirmed receive state")
-        job = Job(pcm, start, dial)
+        job = Job(pcm, start, dial, message=message)
         with self.tune_lock:
             if self.tx_current is not None and not self.tx_current.done.is_set():
                 raise RadioError("A transmission is already queued")
@@ -281,6 +281,8 @@ class Receiver:
             return
         if self.busy() and not self.stop.is_set():
             with self.tune_lock:
+                if action == "ft8_power":
+                    self.radio_state = {**self.radio_state, "power_ready": False, "tx_ready": False}
                 self.commands.append((action, value))
 
     def take_commands(self):
@@ -675,18 +677,40 @@ def keys_ready(keyboard, timeout=.05):
     return [(key, value) for _, _, kind, key, value in EVENT.iter_unpack(data) if kind == 1]
 
 
+def home_frame(display, choice=0):
+    image, draw = menu_frame(display, "ICOMzero", "")
+    for i, (title, subtitle) in enumerate(
+        (("Radio", "Listen & explore"), ("FT8", "Auto tune & decode"))
+    ):
+        x = 12 + i * 154
+        draw.rounded_rectangle(
+            (x, 62, x + 142, 134),
+            10,
+            fill=CARD,
+            outline=GREEN if choice == i else CARD,
+            width=2,
+        )
+        draw.text(
+            (x + 12, 71),
+            title,
+            font=display.fonts["title"],
+            fill=GREEN if choice == i else WHITE,
+        )
+        draw.text((x + 12, 108), subtitle, font=display.fonts["small"], fill=MUTED)
+    draw.text(
+        (12, 150),
+        "Z / C choose    Ent open    Esc exit",
+        font=display.fonts["small"],
+        fill=MUTED,
+    )
+    return image
+
+
 def home(lcd, keyboard):
     display = Display(lcd)
     choice = 0
     while True:
-        image, draw = menu_frame(display, "ICOMzero", "YOUR RADIO. ANYWHERE ON THE LAN.")
-        for i, (title, subtitle) in enumerate((("Radio", "Listen & explore"), ("FT8", "Decode live signals"))):
-            x = 12 + i * 154
-            draw.rounded_rectangle((x, 62, x + 142, 134), 10, fill=CARD,
-                                   outline=GREEN if choice == i else CARD, width=2)
-            draw.text((x + 12, 71), title, font=display.fonts["title"], fill=GREEN if choice == i else WHITE)
-            draw.text((x + 12, 108), subtitle, font=display.fonts["small"], fill=MUTED)
-        draw.text((12, 150), "Z / C choose    Ent open    Esc exit", font=display.fonts["small"], fill=MUTED)
+        image = home_frame(display, choice)
         display.present(image)
         for key, pressed in keys_ready(keyboard):
             if pressed != 1:
@@ -699,22 +723,43 @@ def home(lcd, keyboard):
                 (ui if choice == 0 else ft8_ui)(lcd, keyboard)
 
 
-def ft8_frame(display, history, callsign, ready, status, progress, transmitting=False):
+def ft8_frame(
+    display,
+    history,
+    callsign,
+    ready,
+    status,
+    progress,
+    transmitting=False,
+    armed=False,
+    meters=None,
+    power_set=10,
+    fault=None,
+):
     image = Image.new("RGB", (WIDTH, HEIGHT), BG)
     draw = ImageDraw.Draw(image)
+    meters = meters or {}
     rows = history.visible(11)
     for row, message in enumerate(rows):
         y = row * 13 + 1
         own = message.involves(callsign)
         alternate = (history.start + row) % 2
-        background = "#674719" if own else (CARD if alternate else BG)
+        background = (
+            "#173e5a"
+            if message.local_tx
+            else ("#674719" if own else (CARD if alternate else BG))
+        )
         draw.rectangle((0, y, 319, y + 12), fill=background)
-        text = f"{message.snr:+03d} {message.text}"
+        text = ("TX " if message.local_tx else f"{message.snr:+03d} ") + message.text
         draw.text(
             (9, y - 1),
             text,
             font=display.fonts["small"],
-            fill="#ffe1a1" if own else (GREEN if alternate else WHITE),
+            fill=(
+                "#8bd6ff"
+                if message.local_tx
+                else ("#ffe1a1" if own else (GREEN if alternate else WHITE))
+            ),
         )
         if message.key == history.selected:
             draw.rectangle((0, y, 319, y + 12), outline=GREEN)
@@ -740,9 +785,57 @@ def ft8_frame(display, history, callsign, ready, status, progress, transmitting=
         font=display.fonts["small"],
         fill="#ff8f8f" if transmitting else MUTED,
     )
-    if transmitting:
-        draw.rounded_rectangle((8, 151, 54, 168), 3, fill="#8a2424")
-        draw.text((16, 151), "TX", font=display.fonts["small"], fill=WHITE)
+    draw.text(
+        (5, 152),
+        "ARM" if armed else "OFF",
+        font=display.fonts["small"],
+        fill=GREEN if armed else MUTED,
+    )
+    draw.rounded_rectangle(
+        (36, 151, 61, 168), 3, fill="#8a2424" if transmitting else CARD
+    )
+    draw.text(
+        (39, 152),
+        "TX",
+        font=display.fonts["small"],
+        fill=WHITE if transmitting else MUTED,
+    )
+    now = time.monotonic()
+
+    def fresh(name):
+        value = meters.get(name)
+        stamp = meters.get(name + "_at")
+        return (
+            value
+            if value is not None and stamp is not None and now - stamp <= 1.2
+            else None
+        )
+
+    swr = fresh("swr")
+    watts = fresh("watts")
+    draw.text(
+        (67, 152),
+        f"SWR {swr:.1f}" if swr is not None and (transmitting or fault) else "SWR —",
+        font=display.fonts["small"],
+        fill=WHITE if transmitting else MUTED,
+    )
+    power = (
+        (f"{watts:.1f}W" if watts is not None else "—W")
+        if transmitting
+        else f"{power_set}W set"
+    )
+    draw.text(
+        (128, 152),
+        power,
+        font=display.fonts["small"],
+        fill=WHITE if transmitting else MUTED,
+    )
+    if fault:
+        draw.rectangle((0, 0, 319, 26), fill="#8a2424")
+        draw.text((5, 0), str(fault)[:45], font=display.fonts["small"], fill=WHITE)
+        draw.text(
+            (5, 13), "Tab Menu → Clear warning", font=display.fonts["small"], fill=WHITE
+        )
     return image
 
 
@@ -776,6 +869,7 @@ def ft8_ui(lcd, keyboard):
     dial = 7074000
     band = None
     configured = ready = False
+    pending_autotune = False
     previous = None
     panel = None
     choice = 0
@@ -795,6 +889,8 @@ def ft8_ui(lcd, keyboard):
         "Settings",
         "Stop Transmit",
         "Logging",
+        "Tune antenna",
+        "Clear warning",
         "Help",
         "Back",
     ]
@@ -812,6 +908,7 @@ def ft8_ui(lcd, keyboard):
             ("Grid / region", "grid"),
             ("TX audio Hz", "tx_hz"),
             ("TX level %", "tx_level"),
+            ("TX power W", "tx_power_w"),
             ("CQ period", "cq_period"),
         ],
         "wavelog": [
@@ -904,6 +1001,16 @@ def ft8_ui(lcd, keyboard):
                 if rx.radio_state.get("nr"):
                     rx.command("nr")
                 configured = True
+                pending_autotune = True
+            if (
+                pending_autotune
+                and rx.frequency == dial
+                and rx.radio_state.get("mode") == 1
+                and not rx.radio_state.get("ptt")
+                and not rx.radio_state.get("ptt_pending")
+            ):
+                station.action("tune", dial=dial)
+                pending_autotune = False
             receiving = (
                 configured
                 and rx.busy()
@@ -1042,9 +1149,14 @@ def ft8_ui(lcd, keyboard):
                         ready,
                         rx.status,
                         progress,
-                        rx.radio_state.get("ptt", False),
+                        rx.radio_state.get("ptt", False)
+                        or rx.radio_state.get("tuner") == 2,
+                        armed=station.active,
+                        meters=rx.radio_state,
+                        power_set=int(settings["tx_power_w"]),
+                        fault=rx.radio_state.get("tx_fault"),
                     )
-                    if now < toast_until:
+                    if now < toast_until and not rx.radio_state.get("tx_fault"):
                         draw = ImageDraw.Draw(image)
                         draw.rectangle((0, 0, 319, 17), fill=CARD)
                         draw.text(
@@ -1086,6 +1198,14 @@ def ft8_ui(lcd, keyboard):
                                 and not settings["wavelog_url"].startswith("https://")
                             ):
                                 raise ValueError("API URL must use HTTPS")
+                            if field == "tx_power_w":
+                                maximum = profile.get("rated_power_w", 100)
+                                minimum = 5 if profile["model"] == "TS-890S" else 1
+                                if int(settings[field]) < minimum:
+                                    raise ValueError(f"Radio minimum is {minimum} W")
+                                if int(settings[field]) > maximum:
+                                    raise ValueError(f"Radio maximum is {maximum} W")
+                                rx.command("ft8_power", int(settings[field]))
                             save_settings(settings)
                             editing = False
                         except ValueError as error:
@@ -1114,6 +1234,7 @@ def ft8_ui(lcd, keyboard):
                         decoder.activate(False, clear=True)
                         ready = False
                         history = History()
+                        pending_autotune = True
                         rx.tune(dial)
                         rx.command("mode", 1)
                         band = None
@@ -1166,6 +1287,12 @@ def ft8_ui(lcd, keyboard):
                                 panel = None
                             elif action == "Logging":
                                 show_panel("logging")
+                            elif action == "Tune antenna":
+                                station.action("tune", dial=dial)
+                                panel = None
+                            elif action == "Clear warning":
+                                station.action("clear_fault")
+                                panel = None
                             elif action == "Help":
                                 show_panel("help")
                             else:
@@ -1202,6 +1329,8 @@ def ft8_ui(lcd, keyboard):
                 if key == 15 and pressed == 1:
                     show_panel("menu")
                 elif direction:
+                    if pressed == 2 and held is not None:
+                        continue
                     history.move(direction)
                     if pressed == 1:
                         held = direction
@@ -1214,6 +1343,8 @@ def ft8_ui(lcd, keyboard):
                         notify("Select a decode with F / X")
                     else:
                         station.action("reply", message, dial)
+                        history.follow_bottom()
+                        held = None
                         notify("Answering " + message.text)
                 # B is retained as a convenience, with all band changes cancelling TX.
                 elif key == 48 and pressed == 1 and bands:
@@ -1231,7 +1362,6 @@ def ft8_ui(lcd, keyboard):
             rx.thread.join(timeout=3)
         decoder.close()
         logbook.close()
-
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)

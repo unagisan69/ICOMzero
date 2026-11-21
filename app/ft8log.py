@@ -24,6 +24,7 @@ DEFAULTS = {
     "grid": "",
     "tx_hz": "1500",
     "tx_level": "50",
+    "tx_power_w": "10",
     "cq_period": "Even",
     "wavelog_url": "",
     "wavelog_key": "",
@@ -51,6 +52,8 @@ def validate_station(settings):
         raise ValueError("Enter a 4 or 6 character grid")
     if not 200 <= int(settings["tx_hz"]) <= 2800:
         raise ValueError("TX audio must be 200–2800 Hz")
+    if not 1 <= int(settings.get("tx_power_w", "10")) <= 200:
+        raise ValueError("TX power must be 1–200 W (radio limit applies)")
     if not 10 <= int(settings.get("tx_level", "50")) <= 80:
         raise ValueError("TX level must be 10–80%")
 

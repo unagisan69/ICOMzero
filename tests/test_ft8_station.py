@@ -258,6 +258,12 @@ class UserInterface(unittest.TestCase):
         receiver = module["Receiver"]()
         starts = []
         actions = []
+        histories = []
+
+        def history():
+            h = History()
+            histories.append(h)
+            return h
 
         def start(_):
             starts.append(True)
@@ -300,6 +306,8 @@ class UserInterface(unittest.TestCase):
                 pass
 
         class Station:
+            active = False
+            tuning = False
             clock_status = "Clock synchronized"
             status = "Receive only"
 
@@ -345,7 +353,9 @@ class UserInterface(unittest.TestCase):
                     "Display": Display,
                     "load": lambda: ["192.0.2.1", "50001", "test", "test"],
                 },
-            ), patch("ft8.Decoder", Decoder), patch("ft8log.Logbook", Book), patch(
+            ), patch("ft8.Decoder", Decoder), patch("ft8.History", history), patch(
+                "ft8log.Logbook", Book
+            ), patch(
                 "ft8log.load_settings", return_value=SETTINGS
             ), patch(
                 "ft8station.Station", Station
@@ -356,8 +366,10 @@ class UserInterface(unittest.TestCase):
             os.close(write)
         self.assertEqual(len(starts), 1)
         reply = next(args for args, _ in actions if args[0] == "reply")
-        self.assertEqual(reply[1], rows[18])
+        self.assertEqual(reply[1], rows[19])
         self.assertTrue(any(args[0] == "cq" for args, _ in actions))
+        self.assertTrue(any(args[0] == "tune" for args, _ in actions))
+        self.assertIsNone(histories[0].selected)
 
 
 class ClockInterlock(unittest.TestCase):
@@ -562,6 +574,9 @@ class KenwoodTransmit(unittest.TestCase):
         self.assertTrue(cat.ptt_state)
         cat.close()
         self.assertIn("RX", sent)
+        self.assertNotIn("MS000", sent)  # Never restore modulation while still keyed.
+        cat.receive("IF" + "0" * 26 + "0" + "0" * 8)
+        cat.close()
         self.assertIn("MS000", sent)
         self.assertIn("MS102", sent)
 

@@ -64,10 +64,11 @@ class Message:
     hz: int
     text: str
     snr: int
+    local_tx: bool = False
 
     @property
     def key(self):
-        return (self.slot, self.hz, self.text)
+        return (self.slot, self.hz, ("TX " if self.local_tx else "") + self.text)
 
     def involves(self, call):
         return (
@@ -94,12 +95,20 @@ class History:
         if fingerprint == self.fingerprint:
             return
         self.fingerprint = fingerprint
-        self.messages = [
-            m for m in messages if m.text.startswith("CQ ") or m.involves(callsign)
-        ]
+        self.messages = sorted(
+            [
+                m
+                for m in messages
+                if m.local_tx or m.text.startswith("CQ ") or m.involves(callsign)
+            ],
+            key=lambda m: m.slot,
+        )
         keys = [m.key for m in self.messages]
         if self.selected is not None and self.selected not in keys:
-            self.selected = keys[0] if keys else None
+            self.follow_bottom()
+
+    def follow_bottom(self):
+        self.selected = None
 
     def move(self, direction):
         if not self.messages:
@@ -108,6 +117,9 @@ class History:
             (i for i, m in enumerate(self.messages) if m.key == self.selected),
             (len(self.messages) if direction < 0 else len(self.messages) - 1),
         )
+        if direction > 0 and index + direction >= len(self.messages) - 1:
+            self.follow_bottom()
+            return
         index = max(0, min(len(self.messages) - 1, index + direction))
         self.selected = self.messages[index].key
 
@@ -252,6 +264,10 @@ class Decoder:
                 with self.lock:
                     if generation == self.generation:
                         self.status = "Decoder error: " + type(error).__name__
+
+    def record_tx(self, slot, hz, text):
+        with self.lock:
+            self.messages.append(Message(slot, hz, text, 0, local_tx=True))
 
     def snapshot(self):
         with self.lock:

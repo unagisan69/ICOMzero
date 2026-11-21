@@ -14,10 +14,23 @@ class Job:
     done: threading.Event = field(default_factory=threading.Event)
     success: bool = False
     error: str = ""
+    message: str = ""
+    started: threading.Event = field(default_factory=threading.Event)
 
 
 class Pacer:
-    def __init__(self, take_job, ptt, packet, ready, keyed, status, rate=48000):
+    def __init__(
+        self,
+        take_job,
+        ptt,
+        packet,
+        ready,
+        keyed,
+        status,
+        rate=48000,
+        protection=lambda: None,
+    ):
+        self.protection = protection
         self.take_job = take_job
         self.ptt = ptt
         self.packet = packet
@@ -94,6 +107,11 @@ class Pacer:
         if jump or job.cancel.is_set() or not self.ready(job.dial):
             self.end(False, "Transmit cancelled", wall, mono)
             return
+        if self.armed:
+            reason = self.protection()
+            if reason:
+                self.end(False, reason, wall, mono)
+                return
         if self.armed and mono - self.arm_mono > 14:
             self.end(False, "Transmit watchdog stopped", wall, mono)
             return
@@ -121,6 +139,7 @@ class Pacer:
         chunk = self.rate // 100 * 2
         while self.position < len(job.pcm) and self.position <= expected:
             partial = job.pcm[self.position : self.position + chunk]
+            job.started.set()
             self.packet(partial)
             self.position += len(partial)
         if (

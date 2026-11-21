@@ -5,6 +5,7 @@ import struct
 import select
 import time
 
+from meters import Protection
 from models import DEFAULT_PROFILE, MIN_HZ, MAX_HZ
 
 CONTROLLER = 0xE0
@@ -102,6 +103,15 @@ class Civ:
         self.tx_enabled = (
             tx_enabled and profile.get("transmit", False) and "tx_source" in profile
         )
+        self.protection = Protection(profile, on_state)
+        self.fault_applied = False
+        self.tuning_requested = False
+        self.tuner_state = None
+        self.tune_started = None
+        self.original_power = self.current_power = None
+        self.requested_power = self.power_target = None
+        self.power_applied = False
+        self.power_changed = False
         self.tx_source = bytes.fromhex(profile.get("tx_source", ""))
         self.tx_controls = {
             name: bytes.fromhex(value)
@@ -143,6 +153,11 @@ class Civ:
             struct.pack("<BH", 0xC1, len(frame)) + struct.pack(">H", self.seq) + frame
         )
         self.channel.send(0, body=body, tracked=True)
+        if command == b"\x1c\x01\x02":
+            self.channel.history.pop((self.channel.seq - 1) & 0xFFFF, None)
+            self.tune_started = time.monotonic()
+            self.protection.begin(tuning=True)
+            self.on_state("tune_started", self.tune_started)
         self.seq = (self.seq + 1) & 0xFFFF
 
     def open_close(self, flag):
@@ -168,6 +183,10 @@ class Civ:
         return (
             self.tx_enabled
             and self.prepared
+            and not self.protection.fault
+            and not self.tuning_requested
+            and self.tuner_state != 2
+            and (self.power_target is None or self.current_power == self.power_target)
             and self.source == self.profile["tx_lan"]
             and self.data_mode == 0
             and self.mode == 1
@@ -178,6 +197,18 @@ class Civ:
     def tick(self, now):
         if not self.channel.ready:
             return
+        if self.tx_enabled and (
+            self.ptt_state or self.tuning_requested or self.tuner_state == 2
+        ):
+            reason = self.protection.check()
+            if reason and not self.fault_applied:
+                self.fault_applied = True
+                self.ptt(False)
+                self.tuning_requested = False
+                self.pending = deque(
+                    cmd for cmd in self.pending if cmd != b"\x1c\x01\x02"
+                )
+                self.schedule(b"\x1c\x01\x00", urgent=True)
         if not self.open and now >= self.next_open:
             self.open_close(4)
             self.schedule(b"\x03", urgent=True)
@@ -195,15 +226,53 @@ class Civ:
                     self.schedule(self.tx_source)
                     self.schedule(b"\x1a\x06")
                     self.schedule(b"\x1c\x00")
+                    self.schedule(b"\x14\x0a")
                     for query in self.tx_controls.values():
                         self.schedule(query)
                     self.tx_poll = now + (
-                        0.15 if self.preparing and not self.prepared else 0.5
+                        0.15
+                        if self.preparing and not self.prepared
+                        else (2 if self.ptt_state or self.tuning_requested else 0.5)
                     )
-                if self.ptt_state and now >= self.meter_poll:
-                    for query in (b"\x1c\x00", b"\x15\x11", b"\x15\x13", b"\x15\x12"):
-                        self.schedule(query)
-                    self.meter_poll = now + 0.3
+                if (
+                    self.ptt_state or self.tuning_requested or self.tuner_state == 2
+                ) and now >= self.meter_poll:
+                    queries = (
+                        b"\x15\x12",
+                        b"\x15\x13",
+                        b"\x15\x11",
+                        b"\x1c\x00",
+                        b"\x1c\x01",
+                    )
+                    for query in reversed(queries):
+                        self.schedule(query, urgent=True)
+                    self.meter_poll = now + 0.25
+                if (
+                    self.requested_power is not None
+                    and self.original_power is not None
+                    and not self.power_applied
+                    and not self.ptt_state
+                    and not self.ptt_pending
+                    and not self.tuning_requested
+                    and self.tuner_state != 2
+                ):
+                    rated = self.profile.get("rated_power_w", 100)
+                    if not 1 <= self.requested_power <= rated:
+                        self.protection.trip(f"Power limit is {rated} W")
+                    else:
+                        self.power_target = round(self.requested_power / rated * 255)
+                        self.schedule(b"\x14\x0a", urgent=True)
+                        self.schedule(
+                            b"\x14\x0a" + bytes.fromhex(f"{self.power_target:04d}"),
+                            urgent=True,
+                        )
+                        self.power_applied = True
+                        self.power_changed = True
+                self.on_state(
+                    "power_ready",
+                    self.power_target is not None
+                    and self.current_power == self.power_target,
+                )
             if (
                 self.preparing
                 and not self.prepared
@@ -226,7 +295,29 @@ class Civ:
                 else None
             )
             for action, value in self.take_commands():
-                if action == "ft8_prepare" and self.tx_enabled:
+                if (
+                    action == "clear_fault"
+                    and self.tx_enabled
+                    and not self.ptt_state
+                    and self.tuner_state != 2
+                ):
+                    self.protection.clear()
+                    self.fault_applied = False
+                elif action == "tx_fault" and self.tx_enabled:
+                    self.protection.trip(str(value))
+                elif action == "ft8_power" and self.tx_enabled:
+                    self.requested_power = int(value)
+                    self.power_target = None
+                    self.on_state("power_ready", False)
+                    self.power_applied = False
+                elif action == "tuner_stop" and self.tx_enabled:
+                    self.tuning_requested = False
+                    self.pending = deque(
+                        cmd for cmd in self.pending if cmd != b"\x1c\x01\x02"
+                    )
+                    self.schedule(b"\x1c\x01\x00", urgent=True)
+                    self.ptt(False)
+                elif action == "ft8_prepare" and self.tx_enabled:
                     self.preparing = True
                 elif (
                     action == "tx_power"
@@ -252,7 +343,10 @@ class Civ:
                     and self.profile["tuner"]
                     and self.profile["transmit"]
                 ):
-                    self.schedule(b"\x1c\x01\x02", urgent=True)
+                    if not self.tx_enabled or not self.protection.fault:
+                        self.tuning_requested = self.tx_enabled
+                        self.protection.started = None
+                        self.schedule(b"\x1c\x01\x02", urgent=True)
             if self.tune_target is not None and now >= self.tune_until:
                 self.tune_target = None
             if now >= self.next_poll and self.tune_target is None:
@@ -263,7 +357,9 @@ class Civ:
                     queries.append(b"\x1c\x01")
                 self.schedule(queries[self.poll_index % len(queries)])
                 self.poll_index += 1
-                self.next_poll = now + 0.15
+                self.next_poll = now + (
+                    0.5 if self.ptt_state or self.tuning_requested else 0.15
+                )
             if (
                 self.profile["scope_bins"]
                 and now >= self.next_scope
@@ -275,12 +371,14 @@ class Civ:
         if now < self.next_command:
             return
         if self.ptt_wanted is not None:
-            enabled = self.ptt_wanted
+            enabled = self.ptt_wanted and not self.protection.fault
             self.ptt_wanted = None
             self.send(bytes((0x1C, 0, int(enabled))))
             self.ptt_pending = True
             self.on_state("ptt_pending", True)
             if enabled:
+                self.protection.begin()
+                self.meter_poll = 0
                 # Never replay an expired PTT-on in response to a late repair.
                 self.channel.history.pop((self.channel.seq - 1) & 0xFFFF, None)
             self.schedule(b"\x1c\x00", urgent=True)
@@ -290,7 +388,15 @@ class Civ:
         if (
             self.tune_target is not None
             and now >= self.retry_tune
-            and not (self.tx_enabled and (self.ptt_state or self.ptt_pending))
+            and not (
+                self.tx_enabled
+                and (
+                    self.ptt_state
+                    or self.ptt_pending
+                    or self.tuning_requested
+                    or self.tuner_state == 2
+                )
+            )
         ):
             self.send(b"\x05" + encode_frequency(self.tune_target))
             self.schedule(b"\x03", urgent=True)
@@ -355,17 +461,24 @@ class Civ:
                 if self.original_data is None:
                     self.original_data = command[2:]
             elif self.tx_enabled and len(command) == 4 and command[:2] == b"\x14\x0a":
-                self.on_state("tx_power", decode_frequency(command[2:][::-1]))
+                self.current_power = decode_frequency(command[2:][::-1])
+                if self.original_power is None:
+                    self.original_power = self.current_power
+                self.on_state("tx_power", self.current_power)
             elif (
                 self.tx_enabled
                 and len(command) == 4
                 and command[:2] in (b"\x15\x11", b"\x15\x13", b"\x15\x12")
             ):
+                value = decode_frequency(command[2:][::-1])
                 self.on_state(
                     {0x11: "rf_meter", 0x12: "swr_meter", 0x13: "alc_meter"}[
                         command[1]
                     ],
-                    decode_frequency(command[2:][::-1]),
+                    value,
+                )
+                self.protection.update(
+                    {0x11: "watts", 0x12: "swr", 0x13: "alc"}[command[1]], value
                 )
             elif len(command) == 3 and command[:2] == b"\x1c\x00":
                 self.ptt_state = bool(command[2])
@@ -384,7 +497,18 @@ class Civ:
                     self.schedule(bytes((0x16, 0x40, self.nr)), urgent=True)
                 self.on_state("nr", self.nr)
             elif len(command) == 3 and command[:2] == b"\x1c\x01":
+                self.tuner_state = command[2]
                 self.on_state("tuner", command[2])
+                self.on_state("tuner_at", time.monotonic())
+                if (
+                    self.tuning_requested
+                    and self.tune_started is not None
+                    and time.monotonic() - self.tune_started > 0.6
+                    and command[2] != 2
+                    and not self.ptt_state
+                ):
+                    self.tuning_requested = False
+                    self.protection.started = None
             elif command.startswith(b"\x27\x00\x00"):
                 result = self.scope.parse(command[3:])
                 if result:
@@ -408,6 +532,14 @@ class Civ:
         commands = []
         if self.tx_enabled:
             self.ptt_wanted = None
+            if (self.tuning_requested or self.tuner_state == 2) and hasattr(
+                self.channel, "sock"
+            ):
+                self.send(b"\x1c\x01\x00")
+                time.sleep(0.03)
+                self.send(b"\x1c\x01")
+                time.sleep(0.03)
+                self.tuning_requested = False
             if hasattr(self.channel, "sock"):
                 # Confirm the final unkey before restoring inputs or split.
                 # Repeated PTT-off requests may still be awaiting readback.
@@ -427,11 +559,24 @@ class Civ:
                         for kind, packet in self.channel.drain():
                             if kind == 0:
                                 self.receive(packet)
-                    if not self.ptt_state and not self.ptt_pending:
+                    if (
+                        not self.ptt_state
+                        and not self.ptt_pending
+                        and self.tuner_state != 2
+                    ):
                         break
             else:
                 commands.append(b"\x1c\x00\x00")
-            if self.prepared and not self.ptt_state and not self.ptt_pending:
+            if (
+                (self.prepared or self.power_changed)
+                and not self.ptt_state
+                and not self.ptt_pending
+                and self.tuner_state != 2
+            ):
+                if self.original_power is not None and self.power_changed:
+                    commands.append(
+                        b"\x14\x0a" + bytes.fromhex(f"{self.original_power:04d}")
+                    )
                 if self.original_source is not None:
                     commands.append(self.tx_source + bytes((self.original_source,)))
                 if self.original_data is not None:

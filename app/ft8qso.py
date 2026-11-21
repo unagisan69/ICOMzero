@@ -101,6 +101,8 @@ class Sequencer:
         self.status = "Next: " + self.message
 
     def reply(self, message, dial):
+        if message.local_tx:
+            raise ValueError("Select a received decode, not a local TX row")
         if time.time() - message.slot * 15 > 120:
             raise ValueError("Choose a recent decode")
         partner, extra = call_fields(message)
@@ -128,7 +130,7 @@ class Sequencer:
             self.set_message("rreport", f"R{self.sent:+03d}")
 
     def receive(self, m):
-        if not self.enabled or m.key in self.seen:
+        if m.local_tx or not self.enabled or m.key in self.seen:
             return
         self.seen.add(m.key)
         if (
