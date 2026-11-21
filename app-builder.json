@@ -13,7 +13,8 @@
     "screenshots": [
       "docs/images/waterfall.png",
       "docs/images/bands.png",
-      "docs/images/help.png"
+      "docs/images/help.png",
+      "docs/images/setup.png"
     ],
     "icon": "docs/images/icon.png",
     "license": "GPL-3.0-only",

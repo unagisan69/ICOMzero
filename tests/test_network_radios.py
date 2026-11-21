@@ -1,5 +1,8 @@
-import contextlib
 import json
+import os
+import runpy
+import tempfile
+from unittest.mock import patch
 from pathlib import Path
 import socket
 import struct
@@ -188,6 +191,42 @@ class Kenwood(unittest.TestCase):
             self.assertTrue(scopes)
             self.assertEqual(states["model"], "TS-890S")
             self.assertEqual(states["frequency"], 14_200_000)
+
+
+class SetupMigration(unittest.TestCase):
+    def test_model_selection_from_the_existing_four_field_setup(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"XDG_CONFIG_HOME": directory}):
+            module = runpy.run_path(str(Path(__file__).resolve().parents[1] / "app/icomzero"))
+            config = module["CONFIG"]
+            config.parent.mkdir()
+            config.write_text(json.dumps({
+                "Host": "192.0.2.1", "Control port": "50001", "Username": "test",
+                "Password": "testpass", "volume": 35, "muted": True,
+            }))
+            self.assertEqual(module["load"]()[4:], ["Auto (Icom)", "60001", "User"])
+            class Display:
+                def __init__(self, _):
+                    pass
+                def render(self, *_):
+                    pass
+            read, write = os.pipe()
+            try:
+                # S opens Setup, four arrows reach Radio, nine presses choose TS-890S.
+                keys = [31, 108, 108, 108, 108, *([28] * 9), 108, 108, 28, 1, 1]
+                event = module["EVENT"]
+                os.write(write, b"".join(event.pack(0, 0, 1, key, 1) for key in keys))
+                with patch.dict(module["ui"].__globals__, {"Display": Display}):
+                    module["ui"](-1, read)
+            finally:
+                os.close(read)
+                os.close(write)
+            data = json.loads(config.read_text())
+            self.assertEqual(data["Radio"], "TS-890S")
+            self.assertEqual(data["Control port"], "60000")
+            self.assertEqual(data["Login"], "Admin")
+            self.assertEqual(data["Password"], "testpass")
+            self.assertEqual(data["volume"], 35)
+            self.assertTrue(data["muted"])
 
 
 if __name__ == "__main__":
