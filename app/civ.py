@@ -124,6 +124,7 @@ class Civ:
         self.controls = {}
         self.original_controls = {}
         self.created = time.monotonic()
+        self.started_at = None
         self.last_control = None
         self.source = self.data_mode = self.frequency = self.mode = None
         self.original_source = self.original_data = None
@@ -242,6 +243,8 @@ class Civ:
             self.open_close(4)
             self.schedule(b"\x03", urgent=True)
             self.started = True
+            if self.started_at is None:
+                self.started_at = now
             self.next_open = now + 0.5
             self.next_command = max(self.next_command, now + 0.03)
         if self.open:

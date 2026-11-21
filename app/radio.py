@@ -5,6 +5,9 @@ from contextlib import ExitStack, suppress
 from secrets import randbits
 import selectors
 import socket
+import json
+import os
+from pathlib import Path
 import struct
 import time
 
@@ -27,6 +30,34 @@ PASSCODE = bytes.fromhex(
 
 class RadioError(Exception):
     pass
+
+
+def connection_diagnostic(reason, phase):
+    """Bounded private setup errors, excluding credentials and packet payloads."""
+    try:
+        root = (
+            Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+            / "icomzero"
+        )
+        root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        path = root / "connection-diagnostics.jsonl"
+        if path.exists() and path.stat().st_size > 131072:
+            path.replace(root / "connection-diagnostics.previous.jsonl")
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        with os.fdopen(fd, "a") as stream:
+            os.fchmod(stream.fileno(), 0o600)
+            stream.write(
+                json.dumps(
+                    {
+                        "utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                        "phase": phase,
+                        "error": str(reason),
+                    }
+                )
+                + "\n"
+            )
+    except OSError:
+        pass
 
 
 def encode(value):
@@ -252,6 +283,9 @@ def listen(
         phase_packet = None
         phase_retry = 0
         phase_attempts = 0
+        stream_attempts = 0
+        stream_retry_at = 0
+        stream_wait_until = None
 
         def request(size, kind):
             nonlocal auth_seq
@@ -272,7 +306,17 @@ def listen(
                 now = time.monotonic()
                 if now > deadline:
                     raise ConnectionLost(
-                        "Audio stream timed out" if audio else "Radio setup timed out"
+                        "Audio stream timed out"
+                        if last_pcm is not None
+                        else (
+                            "Audio channel handshake timed out"
+                            if audio
+                            else (
+                                "RX stream setup timed out"
+                                if stream_attempts
+                                else "Radio login/setup timed out"
+                            )
+                        )
                     )
                 for channel in (control, cat, audio):
                     if channel:
@@ -295,8 +339,10 @@ def listen(
                         deadline = now + 10
                 if civ:
                     civ.tick(now)
-                    if now - civ.created > 5 and (
-                        civ.frequency is None or civ.mode is None
+                    if (civ.started_at is None and now - civ.created > 8) or (
+                        civ.started_at is not None
+                        and now - civ.started_at > 5
+                        and (civ.frequency is None or civ.mode is None)
                     ):
                         raise ConnectionLost("Radio control did not become ready")
                     if civ.last_control is not None and now - civ.last_control > 5:
@@ -304,6 +350,47 @@ def listen(
                 if now >= renewal:
                     send_token(5)
                     renewal = now + 60
+                if (
+                    authenticated
+                    and identities
+                    and not stream_requested
+                    and now >= stream_retry_at
+                ):
+                    identity, (name, civ_address, profile) = next(
+                        iter(identities.items())
+                    )
+                    on_state("model", profile["model"])
+                    on_state("profile", profile)
+                    body = request(144, 3)
+                    body[16:32] = identity
+                    body[48 : 48 + len(name)] = name
+                    body[80:96] = user
+                    # Mono signed 16-bit PCM; TX is negotiated only for FT8-capable transmitters.
+                    can_tx = (
+                        tx_enabled and profile["transmit"] and "tx_source" in profile
+                    )
+                    body[96:100] = bytes((1, int(can_tx), 4, 4 if can_tx else 0))
+                    struct.pack_into(
+                        ">IIIII",
+                        body,
+                        100,
+                        RATE,
+                        RATE if can_tx else 0,
+                        cat_sock.getsockname()[1],
+                        audio_sock.getsockname()[1],
+                        150 if can_tx else 0,
+                    )
+                    body[120] = 1
+                    control.send(0, body=body, tracked=True)
+                    on_status("Opening RX stream")
+                    stream_requested = True
+                    stream_attempts += 1
+                    if stream_wait_until is None:
+                        stream_wait_until = now + 30
+                    phase_packet = control.history[(control.seq - 1) & 0xFFFF]
+                    phase_retry = now + 0.8
+                    phase_attempts = 0
+                    deadline = now + 8
                 for key, _ in selector.select(0.01):
                     channel = key.data
                     for kind, data in channel.drain():
@@ -338,11 +425,19 @@ def listen(
                             phase_packet = control.history[(control.seq - 1) & 0xFFFF]
                             phase_retry = now + 0.8
                             phase_attempts = 0
-                            deadline = now + 3
+                            deadline = now + 8
                         if size == 16 and kind == 5:
                             raise ConnectionLost("Radio disconnected")
                         if kind != 0:
                             continue
+                        if (
+                            size == 64
+                            and authenticated
+                            and data[20] == 2
+                            and data[21] == 5
+                        ):
+                            if data[48:52] != b"\0" * 4:
+                                raise ConnectionLost("Radio session expired")
                         if size == 96 and login_sent and not authenticated:
                             if struct.unpack_from("<H", data, 26)[0] != request_id:
                                 continue
@@ -388,56 +483,29 @@ def listen(
                                 raise RadioError(
                                     "More than one radio found; choose a model in Setup"
                                 )
-                        if authenticated and identities and not stream_requested:
-                            identity, (name, civ_address, profile) = next(
-                                iter(identities.items())
-                            )
-                            on_state("model", profile["model"])
-                            on_state("profile", profile)
-                            body = request(144, 3)
-                            body[16:32] = identity
-                            body[48 : 48 + len(name)] = name
-                            body[80:96] = user
-                            # Mono signed 16-bit PCM; TX is negotiated only for FT8-capable transmitters.
-                            can_tx = (
-                                tx_enabled
-                                and profile["transmit"]
-                                and "tx_source" in profile
-                            )
-                            body[96:100] = bytes(
-                                (1, int(can_tx), 4, 4 if can_tx else 0)
-                            )
-                            struct.pack_into(
-                                ">IIIII",
-                                body,
-                                100,
-                                RATE,
-                                RATE if can_tx else 0,
-                                cat_sock.getsockname()[1],
-                                audio_sock.getsockname()[1],
-                                150 if can_tx else 0,
-                            )
-                            body[120] = 1
-                            control.send(0, body=body, tracked=True)
-                            on_status("Opening RX stream")
-                            stream_requested = True
-                            phase_packet = control.history[(control.seq - 1) & 0xFFFF]
-                            phase_retry = now + 0.8
-                            phase_attempts = 0
-                            deadline = now + 3
-                        if (
-                            size == 64
-                            and authenticated
-                            and data[20] == 2
-                            and data[21] == 5
-                        ):
-                            if data[48:52] != b"\0" * 4:
-                                raise ConnectionLost("Radio session expired")
                         if size == 80 and stream_requested:
-                            if data[64] == 1:
-                                raise ConnectionLost("Radio disconnected")
-                            if data[48:52] != b"\0" * 4:
-                                raise ConnectionLost("Radio refused RX stream")
+                            error = int.from_bytes(data[48:52], "big")
+                            ports = struct.unpack_from(">H2xH", data, 66)
+                            if data[64] == 1 or error or not all(ports):
+                                if audio is not None:
+                                    raise ConnectionLost(
+                                        "Radio disconnected the stream"
+                                    )
+                                if stream_attempts >= 4 or now >= stream_wait_until:
+                                    raise ConnectionLost(
+                                        f"Radio refused stream (0x{error:08x}, ports {ports[0]}/{ports[1]})"
+                                    )
+                                # An earlier session can take time to release. Use
+                                # a fresh stream transaction, not a replay of the
+                                # already-refused packet or a new login storm.
+                                stream_requested = False
+                                stream_retry_at = now + min(
+                                    4, 2 ** (stream_attempts - 1)
+                                )
+                                phase_packet = None
+                                deadline = min(stream_wait_until, stream_retry_at + 8)
+                                on_status("Radio busy; waiting to open stream")
+                                continue
                             if audio is None:
                                 cat_port, audio_port = struct.unpack_from(
                                     ">H2xH", data, 66
@@ -448,6 +516,7 @@ def listen(
                                         audio_sock, audio_port, track_data=False
                                     )
                                     phase_packet = None
+                                    deadline = now + 8
                                     civ = Civ(
                                         cat,
                                         civ_address or profile["civ"],

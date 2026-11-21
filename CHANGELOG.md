@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.2 — 2026-11-21
+
+- Retry temporarily refused or zero-port Icom stream requests as fresh transactions within the authenticated session, with bounded backoff.
+- Give login and secondary UDP stream startup independent eight-second budgets; start CI-V readback timing when the command channel opens.
+- Preserve the underlying connection failure reason on screen and in bounded, private connection diagnostics.
+- Add UDP radio-emulator regressions for busy replies, explicit refusals and first audio arriving after the old three-second limit.
+
 ## 0.7.1 — 2026-11-21
 
 - Preserve a successfully tuned antenna when opening Settings, stopping FT8, or clearing a warning; stop/bypass only an active tuner.

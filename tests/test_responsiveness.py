@@ -173,5 +173,33 @@ class InterfaceRecovery(unittest.TestCase):
             os.close(read)
 
 
+class ConnectionFailureDetails(unittest.TestCase):
+    def test_final_error_preserves_reason_and_private_diagnostic(self):
+        import tempfile
+        import json
+
+        module = runpy.run_path(
+            str(Path(__file__).resolve().parents[1] / "app/icomzero")
+        )
+
+        def unavailable(*args, **kwargs):
+            raise module["ConnectionLost"]("Audio channel handshake timed out")
+
+        with tempfile.TemporaryDirectory() as root, patch.dict(
+            os.environ, {"XDG_CONFIG_HOME": root}
+        ), patch.dict(module["Receiver"].run.__globals__, {"listen": unavailable}):
+            receiver = module["Receiver"]()
+            receiver.stop.wait = lambda _: False
+            receiver.run(("192.0.2.1", 50001, "alice", "secret"))
+            self.assertEqual(
+                receiver.status, "Connection failed: Audio channel handshake timed out"
+            )
+            path = Path(root) / "icomzero/connection-diagnostics.jsonl"
+            records = [json.loads(line) for line in path.read_text().splitlines()]
+            self.assertEqual(len(records), 4)
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            self.assertNotIn("secret", path.read_text())
+
+
 if __name__ == "__main__":
     unittest.main()

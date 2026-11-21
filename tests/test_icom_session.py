@@ -1,0 +1,171 @@
+"""Real UDP setup regressions, using an in-process radio with no RF hardware."""
+
+import selectors
+import socket
+import struct
+import threading
+import time
+import unittest
+from radio import HEADER, listen
+from civ import encode_frequency
+
+
+class StreamNegotiation(unittest.TestCase):
+    def run_radio(self, refusal, audio_delay=0):
+        stop = threading.Event()
+        errors, statuses, frames, state, requests = [], [], [], {}, []
+        sockets = [socket.socket(socket.AF_INET, socket.SOCK_DGRAM) for _ in range(3)]
+        for sock in sockets:
+            sock.bind(("127.0.0.1", 0))
+            sock.setblocking(False)
+        control, cat, audio = sockets
+        seqs = {s: 0 for s in sockets}
+        clients = {}
+        ready = set()
+        ready_after = 0
+        audio_at = 0
+        pcm_seq = 0
+
+        def reply(sock, address, local, kind, body=b""):
+            seq = seqs[sock]
+            seqs[sock] += int(kind == 0)
+            sock.sendto(
+                HEADER.pack(16 + len(body), kind, seq, 7, local) + body, address
+            )
+
+        def server():
+            nonlocal audio_at, pcm_seq, ready_after
+            try:
+                with selectors.DefaultSelector() as selector:
+                    for sock in sockets:
+                        selector.register(sock, selectors.EVENT_READ)
+                    while not stop.is_set():
+                        for key, _ in selector.select(0.005):
+                            sock = key.fileobj
+                            data, addr = sock.recvfrom(65535)
+                            size, kind, seq, local, remote = HEADER.unpack_from(data)
+                            clients[sock] = (addr, local)
+                            if kind == 3:
+                                reply(sock, addr, local, 4)
+                            elif kind == 6:
+                                reply(sock, addr, local, 6)
+                                ready.add(sock)
+                                if sock is audio:
+                                    ready_after = time.monotonic() + audio_delay
+                            elif kind == 5:
+                                reply(sock, addr, local, 5)
+                            elif sock is control and kind == 0 and size == 128:
+                                body = bytearray(80)
+                                body[10:12] = data[26:28]
+                                body[12:16] = b"abcd"
+                                reply(sock, addr, local, 0, body)
+                            elif (
+                                sock is control
+                                and kind == 0
+                                and size == 64
+                                and data[21] == 2
+                            ):
+                                body = bytearray(152)
+                                body[50:66] = bytes(range(16))
+                                name = b"IC-7300MK2"
+                                body[66 : 66 + len(name)] = name
+                                body[132] = 0xB6
+                                reply(sock, addr, local, 0, body)
+                            elif sock is control and kind == 0 and size == 144:
+                                requests.append(data[22:24])
+                                body = bytearray(64)
+                                if len(requests) == 1:
+                                    body[32:36] = refusal.to_bytes(4, "big")
+                                else:
+                                    struct.pack_into(
+                                        ">H2xH",
+                                        body,
+                                        50,
+                                        cat.getsockname()[1],
+                                        audio.getsockname()[1],
+                                    )
+                                reply(sock, addr, local, 0, body)
+                            elif (
+                                sock is cat
+                                and kind == 0
+                                and size > 26
+                                and data[16] == 0xC1
+                            ):
+                                cmd = data[25:-1]
+                                payload = (
+                                    b"\x03" + encode_frequency(7074000)
+                                    if cmd == b"\x03"
+                                    else b"\x04\x01\x01" if cmd == b"\x04" else b"\xfb"
+                                )
+                                frame = b"\xfe\xfe\xe0\xb6" + payload + b"\xfd"
+                                reply(
+                                    sock,
+                                    addr,
+                                    local,
+                                    0,
+                                    b"\xc1"
+                                    + struct.pack("<H", len(frame))
+                                    + bytes(2)
+                                    + frame,
+                                )
+                        if (
+                            audio in ready
+                            and len(requests) > 1
+                            and time.monotonic() > max(audio_at, ready_after)
+                        ):
+                            addr, local = clients[audio]
+                            pcm = bytes(1920)
+                            body = (
+                                b"\x80\x00"
+                                + struct.pack(">H", pcm_seq)
+                                + bytes(2)
+                                + struct.pack(">H", len(pcm))
+                                + pcm
+                            )
+                            reply(audio, addr, local, 0, body)
+                            pcm_seq += 1
+                            audio_at = time.monotonic() + 0.02
+            except Exception as error:
+                errors.append(error)
+                stop.set()
+
+        worker = threading.Thread(target=server, daemon=True)
+        worker.start()
+
+        def sample(pcm):
+            frames.append(pcm)
+            if state.get("frequency") and "mode" in state:
+                stop.set()
+
+        try:
+            listen(
+                "127.0.0.1",
+                control.getsockname()[1],
+                "user",
+                "password",
+                stop,
+                statuses.append,
+                sample,
+                lambda v: state.update(frequency=v),
+                on_state=state.__setitem__,
+            )
+        finally:
+            stop.set()
+            worker.join(2)
+            for sock in sockets:
+                sock.close()
+        self.assertFalse(errors, errors)
+        self.assertTrue(frames)
+        self.assertEqual(state.get("frequency"), 7074000)
+        self.assertEqual(len(requests), 2)
+        self.assertNotEqual(requests[0], requests[1])
+        self.assertIn("Radio busy; waiting to open stream", statuses)
+
+    def test_zero_port_busy_reply_retries_fresh_transaction(self):
+        self.run_radio(0)
+
+    def test_explicit_refusal_can_recover_without_relogin(self):
+        self.run_radio(0xFFFFFFFF)
+
+    def test_first_audio_may_arrive_after_old_three_second_limit(self):
+        self.run_radio(0, audio_delay=3.2)

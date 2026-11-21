@@ -27,7 +27,7 @@ Connect the Cardputer to a network that can reach the radio and enable the radio
 For manual installation, download the `.deb` from [GitHub Releases](https://github.com/unagisan69/ICOMzero/releases), then install it on the Cardputer.
 
 ```sh
-sudo apt install ./icomzero_0.7.1-1_arm64.deb
+sudo apt install ./icomzero_0.7.2-1_arm64.deb
 ```
 
 Open **ICOMzero** from APPLaunch after installation.
@@ -42,7 +42,7 @@ Open **ICOMzero** from APPLaunch after installation.
 4. Use **Fn+S** to lower the volume and **Fn+D** to raise it. Hold Fn while pressing S or D repeatedly. **Fn+A** toggles mute. The volume appears briefly as you adjust it, and volume and mute are saved for the next launch.
 5. **N** toggles the radio’s noise reduction where supported. **T** starts its antenna tuner, which briefly transmits a tuning carrier. T is inactive on receiver-only radios and models without a tuner command. The top line shows the current mode, NR when enabled, and TUNING during a tuner operation. Press **M** to switch USB/LSB. Press **Esc** to return to the main menu.
 
-The waterfall uses the radio’s scope span and center or fixed-range settings. Icom radios negotiate secondary UDP ports. Kenwood audio arrives on the configured UDP audio port. Keep the radio and Cardputer on the same LAN. If the radio is busy, disconnect the other LAN client and try again. Settings are saved in `~/.config/icomzero/radio.json` (or under `$XDG_CONFIG_HOME`) with user-only permissions. The password is stored in that file as text and encoded using Icom's LAN protocol on the wire.
+The waterfall uses the radio’s scope span and center or fixed-range settings. Icom radios negotiate secondary UDP ports. Kenwood audio arrives on the configured UDP audio port. Keep the radio and Cardputer on the same LAN. Temporarily refused/zero-port stream replies trigger fresh stream transactions with bounded backoff, using the existing login. Login, secondary-channel setup and CI-V startup have separate time budgets. Connection failures retain their underlying reason on screen and in a bounded private `~/.config/icomzero/connection-diagnostics.jsonl` file (no credentials or packet payloads). If the radio is busy, disconnect the other LAN client and try again. Settings are saved in `~/.config/icomzero/radio.json` (or under `$XDG_CONFIG_HOME`) with user-only permissions. The password is stored in that file as text and encoded using Icom's LAN protocol on the wire.
 
 Press **Tab** on the receiver screen to open the keyboard shortcut guide. **Tab** or **Esc** closes it.
 
@@ -88,7 +88,7 @@ sudo apt install build-essential python3-pil python3-numpy
 make check
 make test
 make package
-sudo apt install ./build/icomzero_0.7.1-1_arm64.deb
+sudo apt install ./build/icomzero_0.7.2-1_arm64.deb
 ```
 
 Use `make package APPBUILDER=/path/to/AppBuilder` for another checkout location. The package includes a foreground APPLaunch entry and declares its Python, Pillow, NumPy, font, ALSA, and PipeWire dependencies.

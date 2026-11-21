@@ -211,11 +211,13 @@ class Receiver:
                            admin=read_config().get("Login") == "Admin",
                            tx_enabled=self.tx_enabled, take_tx=self.take_tx)
                     break
-                except (ConnectionLost, ConnectionError, TimeoutError):
+                except (ConnectionLost, ConnectionError, TimeoutError) as error:
+                    from radio import connection_diagnostic
+                    connection_diagnostic(error, self.status)
                     self.stop_tx()
                     failures += 1
                     if failures > 3:
-                        raise RadioError("Radio connection lost; check the network")
+                        raise RadioError("Connection failed: " + str(error))
                     self.scope = None
                     with self.tune_lock:
                         self.frequency = self.target = self.tune_queue = None
