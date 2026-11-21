@@ -58,6 +58,17 @@ class MeterProtection(unittest.TestCase):
         self.assertIsNone(self.guard.check(21.2))
         self.assertIn("telemetry lost", self.guard.check(21.31))
 
+    def test_internal_tuner_allows_bounded_meter_pause_but_keeps_swr_cutoff(self):
+        self.guard.begin(tuning=True, now=10)
+        self.sample(now=10.1)
+        self.assertIsNone(self.guard.check(11.4))
+        self.assertIsNone(self.guard.check(12.9))
+        self.assertIn("telemetry lost", self.guard.check(13.2))
+        self.guard.clear()
+        self.guard.begin(tuning=True, now=20)
+        self.sample(swr=81, now=20.1)
+        self.assertIn("SWR", self.guard.check(20.1))
+
     def test_power_interpolation_and_invalid_values(self):
         self.assertEqual(interpolate(DEFAULT_PROFILE["meters"]["watts"], 213), 100)
         self.guard.update("swr", None, 10.1)
@@ -335,3 +346,18 @@ class RecoveryRegressions(unittest.TestCase):
         keyed[0] = True  # Independent tuner starts.
         p.tick(100.2, 50.2)
         self.assertEqual(len(commands), before)
+
+
+class Ft8ScopeTraffic(unittest.TestCase):
+    def test_ft8_disables_only_network_scope_output_and_restores_it(self):
+        import struct
+
+        civ, ch, _, _ = TransportSafety.make(self)
+        frame = bytes.fromhex("fefee0b6271101fd")
+        packet = bytes(16) + b"\xc1" + struct.pack("<H", len(frame)) + bytes(2) + frame
+        civ.receive(packet)
+        self.assertIn(bytes.fromhex("271100"), civ.pending)
+        self.assertEqual(civ.scope_settings[0x11], 1)
+        self.assertNotIn(bytes.fromhex("271000"), civ.pending)
+        civ.close()
+        self.assertIn(bytes.fromhex("271101"), ch.sent)

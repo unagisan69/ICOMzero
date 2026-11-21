@@ -27,7 +27,7 @@ Connect the Cardputer to a network that can reach the radio and enable the radio
 For manual installation, download the `.deb` from [GitHub Releases](https://github.com/unagisan69/ICOMzero/releases), then install it on the Cardputer.
 
 ```sh
-sudo apt install ./icomzero_0.7.2-1_arm64.deb
+sudo apt install ./icomzero_0.7.3-1_arm64.deb
 ```
 
 Open **ICOMzero** from APPLaunch after installation.
@@ -63,9 +63,9 @@ The device must report NTP synchronization before transmission. The menu shows c
 
 The footer distinguishes green **ARM** (contact/CQ sequence enabled, including receive periods) from red **TX** (radio transmitting, including tuner carriers). Beside TX are fresh SWR and actual watts; receive periods show the configured wattage. Meter calibration is taken from the pinned wfview radio profiles. Samples older than 1.2 seconds are hidden.
 
-**RF protection:** SWR strictly above 2.0 stops FT8 audio and requests PTT-off/tuner-stop, with a latched warning. ALC at the model’s redline, or above 20% of that redline for 0.3 seconds, also stops FT8; reduce TX audio level before restarting. Missing SWR/ALC telemetry after a 1.2-second startup grace stops transmission. The radio’s internal tuner carrier uses the SWR guard but is exempt from external-audio ALC checks. Consequently automatic tuning can abort when the initial match exceeds 2.0. Correct the cause, then choose **Clear warning** and explicitly restart tuning or the contact. Clearing waits for fresh receive/tuner readback and does not restart transmission. RF faults write bounded, private meter-age diagnostics to `~/.config/icomzero/rf-diagnostics.jsonl`; credentials and decoded traffic are excluded. These network-polled guards supplement the radio’s own protection and cannot guarantee instantaneous RF cutoff if connectivity fails.
+**RF protection:** SWR strictly above 2.0 stops FT8 audio and requests PTT-off/tuner-stop, with a latched warning. ALC at the model’s redline, or above 20% of that redline for 0.3 seconds, also stops FT8; reduce TX audio level before restarting. Missing SWR/ALC telemetry after a 1.2-second startup grace stops FT8 transmission. Internal tuner cycles have a three-second SWR telemetry startup/staleness limit to accommodate tuning pauses; a fresh SWR above 2.0 still stops immediately. The radio’s internal tuner carrier uses the SWR guard but is exempt from external-audio ALC checks. Consequently automatic tuning can abort when the initial match exceeds 2.0. Correct the cause, then choose **Clear warning** and explicitly restart tuning or the contact. Clearing waits for fresh receive/tuner readback and does not restart transmission. RF faults write bounded, private meter-age diagnostics to `~/.config/icomzero/rf-diagnostics.jsonl`; credentials and decoded traffic are excluded. These network-polled guards supplement the radio’s own protection and cannot guarantee instantaneous RF cutoff if connectivity fails.
 
-Speaker audio stays disabled in FT8. Raw audio reaches the local decoder before volume/mute processing. Reception stays aligned to 15-second periods. An early decode pass near 14 seconds prepares timely replies; a full-period pass can add late signals without duplicating rows. Receiver NR is disabled for FT8; keep noise blanker and notch filters off for best decoding. The app restores prior frequency, mode, NR and transmit modulation settings on a normal exit. It avoids restoring transmit inputs while PTT remains unconfirmed.
+Unused network spectrum output is disabled during FT8 and restored on exit, leaving the radio’s own scope display untouched. Speaker audio stays disabled in FT8. Raw audio reaches the local decoder before volume/mute processing. Reception stays aligned to 15-second periods. An early decode pass near 14 seconds prepares timely replies; a full-period pass can add late signals without duplicating rows. Receiver NR is disabled for FT8; keep noise blanker and notch filters off for best decoding. The app restores prior frequency, mode, NR and transmit modulation settings on a normal exit. It avoids restoring transmit inputs while PTT remains unconfirmed.
 
 ### Logging
 
@@ -88,7 +88,7 @@ sudo apt install build-essential python3-pil python3-numpy
 make check
 make test
 make package
-sudo apt install ./build/icomzero_0.7.2-1_arm64.deb
+sudo apt install ./build/icomzero_0.7.3-1_arm64.deb
 ```
 
 Use `make package APPBUILDER=/path/to/AppBuilder` for another checkout location. The package includes a foreground APPLaunch entry and declares its Python, Pillow, NumPy, font, ALSA, and PipeWire dependencies.

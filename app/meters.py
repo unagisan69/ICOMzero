@@ -80,9 +80,14 @@ class Protection:
                     return self.trip("ALC sustained — reduce TX audio")
             else:
                 self.alc_since = None
-        if now - self.started > 1.2:
+        telemetry_timeout = 3.0 if self.tuning else 1.2
+        if now - self.started > telemetry_timeout:
             for name in (("swr",) if self.tuning else ("swr", "alc")):
                 sample = self.samples.get(name)
-                if not sample or sample[1] < self.started or now - sample[1] > 1.2:
+                if (
+                    not sample
+                    or sample[1] < self.started
+                    or now - sample[1] > telemetry_timeout
+                ):
                     return self.trip(name.upper() + " telemetry lost — TX stopped")
         return None

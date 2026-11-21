@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.3 — 2026-11-21
+
+- Allow a bounded three-second meter pause during internal antenna tuning; retain the 1.2-second missing-telemetry deadline for FT8 frames.
+- Keep immediate shutdown for fresh SWR above 2.0 during both tuning and FT8 transmission.
+- Disable unused network spectrum output in FT8 and restore its prior state on exit, without changing the radio’s front-panel scope display.
+
 ## 0.7.2 — 2026-11-21
 
 - Retry temporarily refused or zero-port Icom stream requests as fresh transactions within the authenticated session, with bounded backoff.

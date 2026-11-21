@@ -401,8 +401,8 @@ class Civ:
                 and now >= self.next_scope
                 and now - self.last_scope > 2
             ):
-                for setting in (0x10, 0x11):
-                    self.schedule(bytes((0x27, setting)))
+                for setting in ((0x11,) if self.tx_enabled else (0x10, 0x11)):
+                    self.schedule(bytes((0x27, setting)), urgent=self.tx_enabled)
                 self.next_scope = now + 2
         if now < self.next_command:
             return
@@ -560,7 +560,7 @@ class Civ:
                 ):
                     self.tuning_requested = False
                     self.protection.started = None
-            elif command.startswith(b"\x27\x00\x00"):
+            elif command.startswith(b"\x27\x00\x00") and not self.tx_enabled:
                 result = self.scope.parse(command[3:])
                 if result:
                     self.last_scope = time.monotonic()
@@ -575,8 +575,11 @@ class Civ:
                 setting, value = command[1:]
                 if value in (0, 1):
                     self.scope_settings.setdefault(setting, value)
-                    if value == 0:
-                        self.schedule(bytes((0x27, setting, 1)))
+                    wanted = 0 if self.tx_enabled and setting == 0x11 else 1
+                    if value != wanted:
+                        self.schedule(
+                            bytes((0x27, setting, wanted)), urgent=self.tx_enabled
+                        )
                         self.changed_scope.add(setting)
 
     def close(self):
