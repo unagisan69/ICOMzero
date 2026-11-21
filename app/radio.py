@@ -484,6 +484,8 @@ def listen(
                                             lambda: civ.ptt_state,
                                             lambda value: on_state("tx_status", value),
                                             protection=civ.protection.check,
+                                            off_confirmed=lambda: not civ.ptt_state
+                                            and not civ.ptt_pending,
                                         )
         finally:
             if pacer:

@@ -29,8 +29,10 @@ class Pacer:
         status,
         rate=48000,
         protection=lambda: None,
+        off_confirmed=None,
     ):
         self.protection = protection
+        self.off_confirmed = off_confirmed or (lambda: not self.keyed())
         self.take_job = take_job
         self.ptt = ptt
         self.packet = packet
@@ -59,7 +61,7 @@ class Pacer:
         self.off_until = mono + 3
         self.off_next = mono + 0.1
         if current:
-            if self.keyed():
+            if not self.off_confirmed():
                 self.finishing = (current, success, error, mono)
             else:
                 current.success = success
@@ -75,12 +77,14 @@ class Pacer:
             and abs((wall - self.last_wall) - (mono - self.last_mono)) > 0.15
         )
         self.last_wall, self.last_mono = wall, mono
+        if self.off_until and self.off_confirmed():
+            self.off_until = 0
         if mono < self.off_until and mono >= self.off_next:
             self.ptt(False)
             self.off_next = mono + 0.1
         if self.finishing:
             finished, success, error, since = self.finishing
-            if not self.keyed():
+            if self.off_confirmed():
                 finished.success = success
                 finished.error = error
                 finished.done.set()

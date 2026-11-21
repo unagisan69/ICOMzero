@@ -249,9 +249,89 @@ class AutomaticTunerController(unittest.TestCase):
                     lambda: ("tuner",)
                     in [c.args for c in receiver.command.call_args_list]
                 )
-                receiver.radio_state.update(tuner=1, tuner_at=time.monotonic())
+                receiver.radio_state.update(
+                    tuner=1,
+                    tuner_at=time.monotonic() + 0.01,
+                    tune_started=time.monotonic(),
+                )
                 wait(lambda: not station.tuning)
                 self.assertEqual(station.status, "Antenna tuner ready")
                 receiver.queue_tx.assert_not_called()
             finally:
                 station.close()
+
+
+class RecoveryRegressions(unittest.TestCase):
+    make = TransportSafety.make
+
+    def test_stop_preserves_successful_inline_tuner(self):
+        civ, ch, commands, state = self.make()
+        civ.tuner_state = 1
+        commands.append(("tuner_stop", None))
+        for i in range(20):
+            civ.tick(10 + i * 0.03)
+        self.assertNotIn(bytes.fromhex("1c0100"), ch.sent)
+        self.assertEqual(civ.tuner_state, 1)
+
+    def test_clear_retries_until_fresh_rx_and_tuner_confirmation(self):
+        civ, ch, commands, state = self.make()
+        civ.protection.trip("SWR telemetry lost")
+        civ.tuner_state = 2
+        civ.ptt_state = True
+        commands.append(("clear_fault", None))
+        with patch("civ.time.monotonic", return_value=10):
+            civ.tick(10)
+        self.assertIsNotNone(civ.clear_requested)
+        self.assertIsNotNone(civ.protection.fault)
+        civ.ptt_state = False
+        civ.ptt_pending = False
+        civ.tuner_state = 0
+        civ.ptt_at = civ.tuner_at = 10.1
+        civ.tick(10.1)
+        self.assertIsNone(civ.protection.fault)
+        self.assertEqual(state["fault_clear_status"], "Warning cleared")
+
+    def test_warning_clear_does_not_bypass_an_already_tuned_antenna(self):
+        civ, ch, commands, state = self.make()
+        civ.protection.trip("SWR telemetry lost")
+        civ.tuner_state = 1
+        commands.append(("clear_fault", None))
+        with patch("civ.time.monotonic", return_value=10):
+            civ.tick(10)
+        civ.ptt_at = civ.tuner_at = 10.1
+        civ.ptt_pending = False
+        for i in range(20):
+            civ.tick(10.1 + i * 0.03)
+        self.assertIsNone(civ.protection.fault)
+        self.assertNotIn(bytes.fromhex("1c0100"), ch.sent)
+
+    def test_pending_off_requires_confirmation_then_stops_retrying(self):
+        jobs = [Job(bytes(960), 100.5, 7074000)]
+        commands = []
+        pending = [False]
+        keyed = [False]
+
+        def ptt(value):
+            commands.append(value)
+            pending[0] = True
+
+        p = Pacer(
+            lambda: jobs.pop() if jobs else None,
+            ptt,
+            lambda _: None,
+            lambda _: True,
+            lambda: keyed[0],
+            lambda _: None,
+            off_confirmed=lambda: not keyed[0] and not pending[0],
+        )
+        job = jobs[0]
+        job.cancel.set()
+        p.tick(100, 50)
+        self.assertFalse(job.done.is_set())
+        pending[0] = False
+        p.tick(100.05, 50.05)
+        self.assertTrue(job.done.is_set())
+        before = len(commands)
+        keyed[0] = True  # Independent tuner starts.
+        p.tick(100.2, 50.2)
+        self.assertEqual(len(commands), before)

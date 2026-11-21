@@ -1,13 +1,14 @@
 """Non-blocking station controller; UI actions explicitly arm a contact/CQ."""
 
 import queue
+import json
 import re
 import os
 import subprocess
 import threading
 import time
 from ft8qso import Sequencer, waveform
-from ft8log import load_settings
+from ft8log import load_settings, directory
 
 
 def clock_health():
@@ -43,6 +44,37 @@ def clock_health():
 
 def clock_synced():
     return clock_health()[0]
+
+
+def record_fault(receiver, reason):
+    """Private, bounded diagnostics; never store credentials or decoded traffic."""
+    try:
+        state = receiver.radio_state
+        now = time.monotonic()
+        data = {
+            "utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "fault": reason,
+            "model": state.get("profile", {}).get("model"),
+            "frequency": receiver.frequency,
+            "power_control": state.get("tx_power"),
+            "ptt": state.get("ptt"),
+            "ptt_pending": state.get("ptt_pending"),
+            "tuner": state.get("tuner"),
+        }
+        for name in ("swr", "alc", "watts"):
+            data[name] = state.get(name)
+            stamp = state.get(name + "_at")
+            data[name + "_age_s"] = round(now - stamp, 3) if stamp is not None else None
+        directory().mkdir(parents=True, exist_ok=True, mode=0o700)
+        path = directory() / "rf-diagnostics.jsonl"
+        if path.exists() and path.stat().st_size > 131072:
+            path.replace(directory() / "rf-diagnostics.previous.jsonl")
+        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+        with os.fdopen(fd, "a") as stream:
+            os.fchmod(stream.fileno(), 0o600)
+            stream.write(json.dumps(data) + "\n")
+    except (OSError, TypeError, ValueError):
+        pass
 
 
 class Station:
@@ -90,6 +122,8 @@ class Station:
         cache = {}
         prepared_at = 0
         clock_at = 0
+        clearing_at = None
+        logged_fault = None
         last_wall, last_mono = time.time(), time.monotonic()
         while not self.closed.wait(0.03):
             wall, mono = time.time(), time.monotonic()
@@ -116,7 +150,8 @@ class Station:
                         continue
                     if action == "clear_fault":
                         self.receiver.command("clear_fault")
-                        self.status = "Warning cleared"
+                        clearing_at = time.monotonic()
+                        self.status = "Waiting for confirmed RX"
                         self.sequence.status = self.status
                         continue
                     if self.receiver.radio_state.get("tx_fault"):
@@ -178,9 +213,21 @@ class Station:
                 self.decoder.record_tx(pending[3], self.sequence.hz, pending[2])
                 job.listed = True
             fault = self.receiver.radio_state.get("tx_fault")
+            if fault and fault != logged_fault:
+                record_fault(self.receiver, fault)
+            logged_fault = fault
+            if clearing_at is not None:
+                if not fault:
+                    self.sequence.status = "Warning cleared"
+                    clearing_at = None
+                elif time.monotonic() - clearing_at > 5:
+                    self.sequence.status = "Cannot clear: waiting for radio RX"
+                    clearing_at = None
             if fault:
                 self.receiver.stop_tx()
-                self.sequence.stop(fault)
+                self.sequence.stop(
+                    "Waiting for confirmed RX" if clearing_at is not None else fault
+                )
                 self.tuning = False
             if self.tuning:
                 now = time.monotonic()
@@ -194,10 +241,14 @@ class Station:
                     self.tune_issued = now
                     self.tune_phase = "running"
                     self.sequence.status = "Auto-tuning antenna"
-                elif self.tune_phase == "running" and now - self.tune_issued > 0.8:
+                elif self.tune_phase == "running":
                     tuner = self.receiver.radio_state.get("tuner")
+                    started = self.receiver.radio_state.get("tune_started", 0)
                     fresh = (
-                        self.receiver.radio_state.get("tuner_at", 0) > self.tune_issued
+                        started is not None
+                        and started >= self.tune_issued
+                        and now - started > 0.8
+                        and self.receiver.radio_state.get("tuner_at", 0) > started
                     )
                     if (
                         fresh
@@ -206,10 +257,19 @@ class Station:
                     ):
                         self.tuning = False
                         self.sequence.status = "Antenna tuner ready"
-                    elif fresh and tuner == 0 and now - self.tune_issued > 2:
+                    elif (
+                        fresh
+                        and tuner == 0
+                        and self.receiver.radio_state.get("tune_seen_active")
+                        and not self.receiver.radio_state.get("ptt")
+                    ):
                         self.receiver.command("tx_fault", "Automatic tuner failed")
                         self.tuning = False
                         self.sequence.status = "Automatic tuner failed"
+                    elif not started and now - self.tune_issued > 5:
+                        self.receiver.command("tuner_stop")
+                        self.receiver.command("tx_fault", "Tuner start not confirmed")
+                        self.tuning = False
                 if self.tuning and now > self.tune_deadline:
                     self.receiver.command("tuner_stop")
                     self.receiver.command("tx_fault", "Automatic tuner timed out")

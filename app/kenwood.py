@@ -328,9 +328,11 @@ class Cat:
         )
         if reason and not self.fault_applied:
             self.fault_applied = True
+            active_tuner = self.tuning_requested or self.tuner_state == 2
             self.tuning_requested = False
             self.ptt(False)
-            self.send("AC100")
+            if active_tuner:
+                self.send("AC100")
 
         if (
             self.preparing
@@ -365,9 +367,11 @@ class Cat:
             self.power_target = None
             self.on_state("power_ready", False)
         elif action == "tuner_stop" and self.tx_enabled:
+            active_tuner = self.tuning_requested or self.tuner_state == 2
             self.tuning_requested = False
             self.ptt(False)
-            self.send("AC100")
+            if active_tuner:
+                self.send("AC100")
         elif action == "ft8_prepare" and self.tx_enabled:
             self.preparing = True
         elif action == "mode" and value in MODE_FROM_ICOM:
@@ -482,6 +486,7 @@ def listen(
                     lambda value: on_state("tx_status", value),
                     16000,
                     protection=cat.protection.check,
+                    off_confirmed=lambda: not cat.ptt_state and not cat.ptt_pending,
                 )
             on_status("Signing in")
             send("##CN")

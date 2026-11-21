@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.7.1 — 2026-11-21
+
+- Preserve a successfully tuned antenna when opening Settings, stopping FT8, or clearing a warning; stop/bypass only an active tuner.
+- Keep RX/tuner confirmation polling alive after a fault. Clear warning now waits for fresh receive readback instead of dropping a request against stale TX state.
+- Stop PTT-off retries once receive is confirmed, so they cannot interrupt a subsequent tuner cycle.
+- Judge tuner completion from the actual command-send timestamp and observed tuning state; do not declare failure from an early bypass readback.
+- Reduce configuration polling during RF to leave bandwidth for safety meters. Keep the existing SWR/ALC and telemetry-loss cutoffs.
+- Record private, bounded fault diagnostics with meter ages, without credentials or decoded messages.
+
 ## 0.7.0 — 2026-11-21
 
 - Clear decode selection after replying or scrolling to the newest row; resume following new decodes.

@@ -105,6 +105,10 @@ class Civ:
         )
         self.protection = Protection(profile, on_state)
         self.fault_applied = False
+        self.clear_requested = None
+        self.ptt_at = self.tuner_at = 0
+        self.stop_retry = 0
+        self.tune_seen_active = False
         self.tuning_requested = False
         self.tuner_state = None
         self.tune_started = None
@@ -156,6 +160,7 @@ class Civ:
         if command == b"\x1c\x01\x02":
             self.channel.history.pop((self.channel.seq - 1) & 0xFFFF, None)
             self.tune_started = time.monotonic()
+            self.tune_seen_active = False
             self.protection.begin(tuning=True)
             self.on_state("tune_started", self.tune_started)
         self.seq = (self.seq + 1) & 0xFFFF
@@ -194,21 +199,45 @@ class Civ:
             and all(self.controls.get(name) == 0 for name in self.tx_controls)
         )
 
+    def cancel_tuner(self):
+        active = self.tuner_state == 2 or (
+            self.tuning_requested and self.tune_started is not None
+        )
+        self.pending = deque(cmd for cmd in self.pending if cmd != b"\x1c\x01\x02")
+        self.tuning_requested = False
+        if active:
+            self.schedule(b"\x1c\x01", urgent=True)
+            self.schedule(b"\x1c\x01\x00", urgent=True)
+
     def tick(self, now):
         if not self.channel.ready:
             return
-        if self.tx_enabled and (
-            self.ptt_state or self.tuning_requested or self.tuner_state == 2
-        ):
-            reason = self.protection.check()
-            if reason and not self.fault_applied:
+        if self.tx_enabled:
+            if self.ptt_state or self.tuning_requested or self.tuner_state == 2:
+                self.protection.check()
+            if self.protection.fault and (
+                not self.fault_applied
+                or (
+                    (self.ptt_state or self.ptt_pending or self.tuner_state == 2)
+                    and now >= self.stop_retry
+                )
+            ):
                 self.fault_applied = True
                 self.ptt(False)
-                self.tuning_requested = False
-                self.pending = deque(
-                    cmd for cmd in self.pending if cmd != b"\x1c\x01\x02"
-                )
-                self.schedule(b"\x1c\x01\x00", urgent=True)
+                self.cancel_tuner()
+                self.stop_retry = now + 0.25
+            if (
+                self.clear_requested is not None
+                and self.ptt_at >= self.clear_requested
+                and self.tuner_at >= self.clear_requested
+                and not self.ptt_state
+                and not self.ptt_pending
+                and self.tuner_state != 2
+            ):
+                self.protection.clear()
+                self.fault_applied = False
+                self.clear_requested = None
+                self.on_state("fault_clear_status", "Warning cleared")
         if not self.open and now >= self.next_open:
             self.open_close(4)
             self.schedule(b"\x03", urgent=True)
@@ -223,19 +252,26 @@ class Civ:
                 self.retry_tune = now
             if self.tx_enabled and self.mode is not None and self.frequency is not None:
                 if now >= self.tx_poll:
-                    self.schedule(self.tx_source)
-                    self.schedule(b"\x1a\x06")
                     self.schedule(b"\x1c\x00")
-                    self.schedule(b"\x14\x0a")
-                    for query in self.tx_controls.values():
-                        self.schedule(query)
+                    if not (
+                        self.ptt_state or self.tuning_requested or self.tuner_state == 2
+                    ):
+                        self.schedule(self.tx_source)
+                        self.schedule(b"\x1a\x06")
+                        self.schedule(b"\x14\x0a")
+                        for query in self.tx_controls.values():
+                            self.schedule(query)
                     self.tx_poll = now + (
                         0.15
                         if self.preparing and not self.prepared
                         else (2 if self.ptt_state or self.tuning_requested else 0.5)
                     )
                 if (
-                    self.ptt_state or self.tuning_requested or self.tuner_state == 2
+                    self.ptt_state
+                    or self.tuning_requested
+                    or self.tuner_state == 2
+                    or self.protection.fault
+                    or self.clear_requested is not None
                 ) and now >= self.meter_poll:
                     queries = (
                         b"\x15\x12",
@@ -295,14 +331,13 @@ class Civ:
                 else None
             )
             for action, value in self.take_commands():
-                if (
-                    action == "clear_fault"
-                    and self.tx_enabled
-                    and not self.ptt_state
-                    and self.tuner_state != 2
-                ):
-                    self.protection.clear()
-                    self.fault_applied = False
+                if action == "clear_fault" and self.tx_enabled:
+                    self.clear_requested = time.monotonic()
+                    self.on_state("fault_clear_status", "Waiting for confirmed RX")
+                    self.ptt(False)
+                    self.cancel_tuner()
+                    self.schedule(b"\x1c\x01", urgent=True)
+                    self.schedule(b"\x1c\x00", urgent=True)
                 elif action == "tx_fault" and self.tx_enabled:
                     self.protection.trip(str(value))
                 elif action == "ft8_power" and self.tx_enabled:
@@ -311,12 +346,9 @@ class Civ:
                     self.on_state("power_ready", False)
                     self.power_applied = False
                 elif action == "tuner_stop" and self.tx_enabled:
-                    self.tuning_requested = False
-                    self.pending = deque(
-                        cmd for cmd in self.pending if cmd != b"\x1c\x01\x02"
-                    )
-                    self.schedule(b"\x1c\x01\x00", urgent=True)
-                    self.ptt(False)
+                    self.cancel_tuner()
+                    if self.ptt_state or self.ptt_pending:
+                        self.ptt(False)
                 elif action == "ft8_prepare" and self.tx_enabled:
                     self.preparing = True
                 elif (
@@ -345,6 +377,7 @@ class Civ:
                 ):
                     if not self.tx_enabled or not self.protection.fault:
                         self.tuning_requested = self.tx_enabled
+                        self.tune_started = None
                         self.protection.started = None
                         self.schedule(b"\x1c\x01\x02", urgent=True)
             if self.tune_target is not None and now >= self.tune_until:
@@ -482,6 +515,13 @@ class Civ:
                 )
             elif len(command) == 3 and command[:2] == b"\x1c\x00":
                 self.ptt_state = bool(command[2])
+                self.ptt_at = time.monotonic()
+                if (
+                    self.tuning_requested
+                    and self.tune_started is not None
+                    and self.ptt_state
+                ):
+                    self.tune_seen_active = True
                 self.ptt_pending = False
                 self.on_state("ptt_pending", False)
                 self.on_state("ptt", self.ptt_state)
@@ -498,13 +538,21 @@ class Civ:
                 self.on_state("nr", self.nr)
             elif len(command) == 3 and command[:2] == b"\x1c\x01":
                 self.tuner_state = command[2]
+                self.tuner_at = time.monotonic()
+                if (
+                    command[2] == 2
+                    and self.tuning_requested
+                    and self.tune_started is not None
+                ):
+                    self.tune_seen_active = True
                 self.on_state("tuner", command[2])
-                self.on_state("tuner_at", time.monotonic())
+                self.on_state("tuner_at", self.tuner_at)
+                self.on_state("tune_seen_active", self.tune_seen_active)
                 if (
                     self.tuning_requested
                     and self.tune_started is not None
                     and time.monotonic() - self.tune_started > 0.6
-                    and command[2] != 2
+                    and (command[2] == 1 or (command[2] == 0 and self.tune_seen_active))
                     and not self.ptt_state
                 ):
                     self.tuning_requested = False
