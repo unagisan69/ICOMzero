@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.5.0 — 2026-11-21
+
+- Add a Radio / FT8 startup menu and receive-only FT8 message screen.
+- Decode locally from UTC-aligned audio cycles before speaker volume/mute, using ft8_lib.
+- Start FT8 on 40m (7.074 MHz USB), with B band selection and scrollable UTC/message history.
+- Disable receiver NR for FT8 and restore prior frequency, mode and NR on return to the menu.
+- Add M to switch USB/LSB in Radio view and update its shortcut guide.
+- Package the native decoder and third-party licenses for ARM64.
+- Pass 25 tests covering recorded signals, silent input, capture alignment, stale band results, mute and mode controls.
+- Decode 75 live messages over five 40m cycles on IC-7300MK2; verify band changes and M mode readback through the device UI.
+
 ## 0.4.1 — 2026-11-20
 
 - Recover transient connection failures automatically and retry lost Icom setup requests.

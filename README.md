@@ -27,24 +27,32 @@ Connect the Cardputer to a network that can reach the radio and enable the radio
 For manual installation, download the `.deb` from [GitHub Releases](https://github.com/unagisan69/ICOMzero/releases), then install it on the Cardputer.
 
 ```sh
-sudo apt install ./icomzero_0.4.1-1_all.deb
+sudo apt install ./icomzero_0.5.0-1_arm64.deb
 ```
 
 Open **ICOMzero** from APPLaunch after installation.
 
 ## Listen
 
-1. Open **Setup** with **S**. On first launch, the setup screen opens automatically.
+1. Choose **Radio** from the startup menu. Open **Setup** with **S**. Setup opens automatically when no connection is configured.
 2. Enter the radio's IPv4 address or hostname, control port, username, and password. Use **↑**, **↓**, or **Tab** to scroll through setup fields. Press **Enter** to edit a text field and again to save. Press **Enter** on **Radio** to cycle models. **Auto (Icom)** identifies a supported Icom from its name or CI-V address. Select the exact model if the radio uses a custom name and address. Press **Esc** to leave setup.
    - Icom uses control port **50001** by default. Keep its normal negotiated audio ports.
    - TS-890S uses **60000** for TCP control and **60001** for UDP audio. Selecting TS-890S switches the default control port. Set **Login** to **User** or **Admin** to match the account configured on the radio. Its 16 kHz LPCM audio is converted to the app's 48 kHz speaker stream.
 3. Press **Enter** to start or stop listening. **Z** and **C** tune down and up in 1 kHz steps. Hold either key to scroll. Press **B** for band presets, select with **Z** or **C**, then press **Enter** to tune to the displayed frequency. The menu shows presets within the connected model’s frequency ranges. Band presets select LSB on 160/80/40 m and USB on the remaining presets.
 4. Use **Fn+S** to lower the volume and **Fn+D** to raise it. Hold Fn while pressing S or D repeatedly. **Fn+A** toggles mute. The volume appears briefly as you adjust it, and volume and mute are saved for the next launch.
-5. **N** toggles the radio’s noise reduction where supported. **T** starts its antenna tuner, which briefly transmits a tuning carrier. T is inactive on receiver-only radios and models without a tuner command. The top line shows the current mode, NR when enabled, and TUNING during a tuner operation. Press **Esc** to return to the launcher.
+5. **N** toggles the radio’s noise reduction where supported. **T** starts its antenna tuner, which briefly transmits a tuning carrier. T is inactive on receiver-only radios and models without a tuner command. The top line shows the current mode, NR when enabled, and TUNING during a tuner operation. Press **M** to switch USB/LSB. Press **Esc** to return to the main menu.
 
 The waterfall uses the radio’s scope span and center or fixed-range settings. Icom radios negotiate secondary UDP ports. Kenwood audio arrives on the configured UDP audio port. Keep the radio and Cardputer on the same LAN. If the radio is busy, disconnect the other LAN client and try again. Settings are saved in `~/.config/icomzero/radio.json` (or under `$XDG_CONFIG_HOME`) with user-only permissions. The password is stored in that file as text and encoded using Icom's LAN protocol on the wire.
 
 Press **Tab** on the receiver screen to open the keyboard shortcut guide. **Tab** or **Esc** closes it.
+
+## FT8 receive
+
+Choose **FT8** from the startup menu to connect and decode on **40m, 7.074 MHz USB**. **B** opens FT8 band presets; use **Z/C** and **Enter** to select. **↑/↓** scroll decoded history. **Enter** stops/restarts reception, and **Esc** returns to the menu. The decoder runs locally on the Cardputer; no computer bridge is needed.
+
+Messages show the UTC receive period, audio frequency and decoded text. Expect the first results after collecting a complete 15-second period, usually 15–30 seconds after connection. Keep the device clock synchronized with network time. Receiver noise reduction is disabled during FT8 and the prior frequency, mode and NR setting are restored when returning to the menu. Keep receiver noise blanker and notch filters off for best decoding.
+
+Speaker volume and mute do not affect decoding. This release receives and decodes only; FT8 does not transmit, call stations, or run the antenna tuner. FT8 uses USB on every preset, including 40m. Native decoding uses [ft8_lib](https://github.com/kgoba/ft8_lib), with CRC-checked messages; sensitivity is lower than a full WSJT-X decoder, and some hashed callsigns may remain unresolved. No estimated SNR is displayed. The package is built for the Cardputer's ARM64 processor.
 
 ## Build and test
 
@@ -52,11 +60,11 @@ On Debian or the Cardputer itself:
 
 ```sh
 git clone https://github.com/CardputerZero/AppBuilder.git ../AppBuilder
-sudo apt install python3-pil python3-numpy
+sudo apt install build-essential python3-pil python3-numpy
 make check
 make test
 make package
-sudo apt install ./build/icomzero_0.4.1-1_all.deb
+sudo apt install ./build/icomzero_0.5.0-1_arm64.deb
 ```
 
 Use `make package APPBUILDER=/path/to/AppBuilder` for another checkout location. The package includes a foreground APPLaunch entry and declares its Python, Pillow, NumPy, font, ALSA, and PipeWire dependencies.

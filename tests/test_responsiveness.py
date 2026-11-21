@@ -140,7 +140,7 @@ class InterfaceRecovery(unittest.TestCase):
 
     def test_transient_session_failure_reconnects_on_one_start(self):
         module = runpy.run_path(str(Path(__file__).resolve().parents[1] / "app/icomzero"))
-        attempts, statuses = [], []
+        attempts, statuses, captured = [], [], []
         read, write = os.pipe()
         class Player:
             def __init__(self, *_, **__):
@@ -153,17 +153,21 @@ class InterfaceRecovery(unittest.TestCase):
             attempts.append(True)
             if len(attempts) == 1:
                 raise module["ConnectionLost"]("lost handshake")
-            args[6](bytes(200))
+            args[6](bytes((1, 2)) * 100)
             args[4].set()
         try:
             with patch.dict(module["Receiver"].run.__globals__, {"listen": listen}), patch("subprocess.Popen", Player):
                 receiver = module["Receiver"](statuses.append)
+                receiver.muted = True
+                receiver.audio_observer = captured.append
                 receiver.start(("192.0.2.1", 50001, "user", "password"))
                 receiver.thread.join(2)
             self.assertFalse(receiver.busy())
             self.assertEqual(len(attempts), 2)
             self.assertIn("Reconnecting (1/3)", statuses)
             self.assertEqual(receiver.written, 200)
+            self.assertEqual(captured, [bytes((1, 2)) * 100])
+            self.assertEqual(os.read(read, 200), bytes(200))
             self.assertEqual(receiver.status, "Disconnected")
         finally:
             os.close(read)
