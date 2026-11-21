@@ -156,7 +156,7 @@ class InterfaceRecovery(unittest.TestCase):
             args[6](bytes((1, 2)) * 100)
             args[4].set()
         try:
-            with patch.dict(module["Receiver"].run.__globals__, {"listen": listen}), patch("subprocess.Popen", Player):
+            with patch.dict(module["Receiver"].run.__globals__, {"listen": listen}), patch("subprocess.Popen", Player), patch("radio.connection_diagnostic"):
                 receiver = module["Receiver"](statuses.append)
                 receiver.muted = True
                 receiver.audio_observer = captured.append
