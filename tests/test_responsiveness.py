@@ -96,7 +96,7 @@ class PacketRecovery(unittest.TestCase):
     def test_packet_drain_yields_to_deadlines_during_slow_processing(self):
         for seq in range(40):
             self.packet(seq)
-        with patch("radio.time.monotonic", side_effect=[0, .004]):
+        with patch("radio.time.monotonic", side_effect=[0, 0, .004]):
             first = list(self.channel.drain(budget=.003))
         self.assertEqual(len(first), 1)
         self.assertEqual(len(list(self.channel.drain())), 39)
@@ -211,3 +211,47 @@ class ConnectionFailureDetails(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class AddressChangeRecovery(unittest.TestCase):
+    def test_dhcp_address_change_socket_error_reconnects(self):
+        import tempfile
+        import errno
+        module=runpy.run_path(str(Path(__file__).resolve().parents[1]/'app/icomzero'))
+        attempts=[]
+        def moved(*args,**kwargs):
+            attempts.append(True)
+            if len(attempts)==1:raise OSError(errno.EADDRNOTAVAIL,'Cannot assign requested address')
+        with tempfile.TemporaryDirectory() as root,patch.dict(os.environ,{'XDG_CONFIG_HOME':root}),patch.dict(module['Receiver'].run.__globals__,{'listen':moved}):
+            receiver=module['Receiver']();receiver.stop.wait=lambda _:False
+            receiver.run(('192.0.2.1',50001,'test','secret'))
+            self.assertEqual(len(attempts),2)
+            self.assertEqual(receiver.session_revision,2)
+            self.assertIn('Cannot assign requested address',(Path(root)/'icomzero/connection-diagnostics.jsonl').read_text())
+
+    def test_pacer_disconnect_keeps_underlying_network_reason(self):
+        from ft8tx import Pacer,Job
+        job=Job(bytes(960),1500.5,14074000)
+        p=Pacer(lambda:job,lambda value:None,lambda pcm:None,lambda dial:True,lambda:False,lambda status:None)
+        p.job=job
+        p.close('Radio connection lost: Cannot assign requested address')
+        self.assertTrue(job.done.is_set())
+        self.assertIn('Cannot assign requested address',job.error)
+
+    def test_reconnect_forces_rx_and_preserves_latched_rf_fault(self):
+        import tempfile
+        import errno
+        module=runpy.run_path(str(Path(__file__).resolve().parents[1]/'app/icomzero'))
+        attempts=[];recovery=[]
+        receiver=module['Receiver']();receiver.tx_enabled=True
+        def moved(*args,**kwargs):
+            attempts.append(True)
+            if len(attempts)==1:
+                receiver.radio_state={'tx_fault':'SWR too high'}
+                raise OSError(errno.ENETUNREACH,'Network unreachable')
+            recovery.extend(args[10]())
+        with tempfile.TemporaryDirectory() as root,patch.dict(os.environ,{'XDG_CONFIG_HOME':root}),patch.dict(module['Receiver'].run.__globals__,{'listen':moved}):
+            receiver.stop.wait=lambda _:False
+            receiver.run(('192.0.2.1',50001,'test','secret'))
+        self.assertIn(('force_rx',None),recovery)
+        self.assertIn(('tx_fault','SWR too high'),recovery)
+        self.assertEqual(receiver.radio_state['tx_fault'],'SWR too high')

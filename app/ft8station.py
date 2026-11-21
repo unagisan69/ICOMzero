@@ -78,6 +78,9 @@ def record_fault(receiver, reason, job=None):
         for name in ("ptt_on_sent", "ptt_readback"):
             stamp = state.get(name + "_at")
             data[name + "_age_s"] = round(now - stamp, 3) if stamp is not None else None
+        for name in ("control_rx", "cat_rx", "audio_rx", "civ_reply"):
+            stamp = state.get(name + "_at")
+            data[name + "_age_s"] = round(now - stamp, 3) if stamp is not None else None
         for name in ("swr", "alc", "watts"):
             data[name] = state.get(name)
             stamp = state.get(name + "_at")

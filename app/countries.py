@@ -4,6 +4,7 @@ from functools import lru_cache
 import os
 from pathlib import Path
 import re
+from us_states import label as us_label
 
 
 def bundled_path():
@@ -113,7 +114,7 @@ def message_country(message):
         call = parts[0] if message.local_tx else parts[1]
     else:
         return "Unknown"
-    return country(call)
+    return us_label(call, country(call))
 
 
 def activation_cq(message):

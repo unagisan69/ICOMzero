@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.12.0 — 2026-11-21
+
+- Preserve an existing designated FT8 dial on entry; otherwise require band selection before setup/tuning/TX. Show the active band beside power and in the menu. Revalidate after reconnection without automatically resuming RF.
+- Use IC-7300MK2 USB-D/FIL1 and DATA MOD/LAN with explicit mode/filter/source readback. Disable split/RIT/XIT during receive setup and preserve original settings for restoration.
+- Reconnect after DHCP/address-change socket errors, request RX on recovery, retain latched RF faults, and preserve underlying network/channel-close reasons. Add channel/CIV reply-age diagnostics.
+- Add offline USA-XX registered-state labels from a minimized FCC callsign/state database; keep unknown states explicit and preserve foreign operating entities. Include source provenance and a reproducible extraction tool.
+
 ## 0.11.0 — 2026-11-21
 
 - Change Auto CQ to one own CQ, then up to five distinct strong recent CQ targets with two calls each before no-response stop.

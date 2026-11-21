@@ -154,13 +154,13 @@ class Pacer:
         ):
             self.end(True, wall=wall, mono=mono)
 
-    def close(self):
+    def close(self, reason="Disconnected"):
         if self.job or self.armed:
-            self.end(False, "Disconnected")
+            self.end(False, reason)
         else:
             self.ptt(False)
         if self.finishing:
             job, _, _, _ = self.finishing
-            job.error = "Disconnected"
+            job.error = reason
             job.done.set()
             self.finishing = None

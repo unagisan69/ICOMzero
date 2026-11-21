@@ -376,7 +376,7 @@ class Cat:
             self.requested_power = int(value)
             self.power_target = None
             self.on_state("power_ready", False)
-        elif action == "tuner_stop" and self.tx_enabled:
+        elif action in ("tuner_stop", "force_rx") and self.tx_enabled:
             active_tuner = self.tuning_requested or self.tuner_state == 2
             self.tuning_requested = False
             self.ptt(False)

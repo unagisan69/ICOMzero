@@ -427,7 +427,9 @@
           ]
         ]
       },
-      "rated_power_w": 100
+      "rated_power_w": 100,
+      "ft8_tx_source": "1a050085",
+      "ft8_data_mode": 1
     },
     {
       "model": "IC-7610",
@@ -1578,5 +1580,6 @@
       "rated_power_w": 100
     }
   ],
-  "meter_notes": "Piecewise meter calibration from the pinned wfview rig files; only 8-bit raw points are accepted. IC-7300MK2 upstream SWR point 2410 is outside that range and omitted. ALC values are normalized to the redline."
+  "meter_notes": "Piecewise meter calibration from the pinned wfview rig files; only 8-bit raw points are accepted. IC-7300MK2 upstream SWR point 2410 is outside that range and omitted. ALC values are normalized to the redline.",
+  "ft8_overrides_source": "https://icomuk.co.uk/files/icom/PDF/productAdditionalFile/IC-7300MK2_ENG_CI-V_0.pdf"
 }

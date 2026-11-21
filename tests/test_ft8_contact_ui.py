@@ -309,7 +309,7 @@ class PowerAndDisplay(unittest.TestCase):
 
 
 class SelectedMenus(unittest.TestCase):
-    def run_menu(self, manual=False, auto=False, pota=False, fault=False):
+    def run_menu(self, manual=False, auto=False, pota=False, fault=False, initial=7074000, choose=False):
         from PIL import ImageFont
 
         module = runpy.run_path(
@@ -317,10 +317,12 @@ class SelectedMenus(unittest.TestCase):
         )
         receiver = module["Receiver"]()
         actions = []
+        tunes = []
+        receiver.tune = lambda hz=None, **kw: tunes.append(hz)
 
         def start(_):
-            receiver.frequency = 7074000
-            receiver.radio_state = {"profile": DEFAULT_PROFILE, "mode": 1, "nr": False, "tx_fault": "SWR telemetry lost — TX stopped" if fault else None}
+            receiver.frequency = initial
+            receiver.radio_state = {"profile": DEFAULT_PROFILE, "mode": 1, "data_mode": 1, "split": 0, "rit": 0, "xit": 0, "nr": False, "tx_fault": "SWR telemetry lost — TX stopped" if fault else None}
 
         receiver.start = start
         receiver.busy = lambda: not receiver.stop.is_set()
@@ -378,6 +380,8 @@ class SelectedMenus(unittest.TestCase):
                 pass
 
         keys = [33, 15] + ([45] * 7 if manual else [45] * (3 if pota else (2 if auto else 1))) + [28]
+        if initial not in (7074000, 14074000):
+            keys = [28, 1] if choose else [15, 1]
         if manual:
             keys += [45] * 4 + [28]
         keys += [1, 1] if fault else [1]
@@ -407,6 +411,7 @@ class SelectedMenus(unittest.TestCase):
         finally:
             os.close(read)
             os.close(write)
+        self.last_tunes = tunes
         return actions, rows
 
     def test_selected_call_cq_routes_to_reply_not_fresh_cq(self):
@@ -437,3 +442,18 @@ class SelectedMenus(unittest.TestCase):
     def test_pota_hunt_menu_action_is_beneath_auto_cq(self):
         actions, _ = self.run_menu(pota=True)
         self.assertTrue(any(args[0] == "pota_hunt" for args, _ in actions))
+
+    def test_existing_20m_frequency_is_not_silently_retuned_to_40m(self):
+        actions, _ = self.run_menu(auto=True, initial=14074000)
+        auto = next((kw for args,kw in actions if args[0]=="auto_cq"),None)
+        self.assertEqual(auto['dial'],14074000)
+        self.assertNotIn(7074000,self.last_tunes)
+
+    def test_non_ft8_frequency_requires_selection_and_tab_cannot_bypass(self):
+        actions, _ = self.run_menu(initial=14200000)
+        self.assertFalse(any(args[0] in ('tune','cq','reply','auto_cq','pota_hunt') for args,_ in actions))
+        self.assertFalse(self.last_tunes)
+
+    def test_band_choice_sets_designated_frequency_before_beginning(self):
+        self.run_menu(initial=14200000, choose=True)
+        self.assertIn(14074000,self.last_tunes)

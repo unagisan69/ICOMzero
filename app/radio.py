@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import struct
 import time
+import sys
 
 from civ import Civ
 from models import PROFILES, find_icom
@@ -87,6 +88,7 @@ class Channel:
         self.missing = {}
         self.rx_seq = None
         self.closed = False
+        self.last_received = None
         self.track_data = True
         self.next_repair = 0
         self.next_ping = self.next_idle = self.next_probe = 0
@@ -145,6 +147,7 @@ class Channel:
             self.send(6, 1)
         if self.remote and sender != self.remote:
             return None
+        self.last_received = time.monotonic()
         if size == 16 and kind == 5:
             self.closed = True
         if size == 16 and kind == 6:
@@ -304,6 +307,7 @@ def listen(
             body[20:22] = b"\x07\x98"
             control.send(0, body=body, tracked=True)
 
+        telemetry_at = 0
         loop_at = time.monotonic()
         try:
             while not stop.is_set():
@@ -313,6 +317,17 @@ def listen(
                 if gap > 0.08:
                     on_state("transport_gap_ms", round(gap * 1000, 1))
                     on_state("transport_gap_at", now)
+                if now >= telemetry_at:
+                    for name, channel in (
+                        ("control", control),
+                        ("cat", cat),
+                        ("audio", audio),
+                    ):
+                        if channel is not None:
+                            on_state(name + "_rx_at", channel.last_received)
+                    if civ is not None:
+                        on_state("civ_reply_at", civ.last_control)
+                    telemetry_at = now + 0.25
                 if now > deadline:
                     raise ConnectionLost(
                         "Audio stream timed out"
@@ -404,6 +419,13 @@ def listen(
                     channel = key.data
                     for kind, data in channel.drain(budget=0.003):
                         size = len(data)
+                        if size == 16 and kind == 5:
+                            name = (
+                                "audio"
+                                if channel is audio
+                                else ("CAT" if channel is cat else "control")
+                            )
+                            raise ConnectionLost(f"Radio closed {name} channel")
                         if channel is audio:
                             if kind == 0 and size > 24 and (size - 24) % 2 == 0:
                                 declared = struct.unpack_from(">H", data, 22)[0]
@@ -566,9 +588,22 @@ def listen(
                                             and not civ.ptt_pending,
                                         )
         finally:
+            ending = sys.exc_info()[1]
+            if ending is not None:
+                detail = (
+                    str(ending)
+                    if isinstance(ending, (RadioError, OSError))
+                    else type(ending).__name__
+                )
+                reason = "Radio connection lost: " + detail
+                on_state("connection_error", reason)
+            else:
+                reason = (
+                    "Transmit stopped" if stop.is_set() else "Radio connection ended"
+                )
             if pacer:
                 with suppress(OSError):
-                    pacer.close()
+                    pacer.close(reason)
             if civ:
                 with suppress(OSError):
                     civ.close()

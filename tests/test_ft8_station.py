@@ -268,7 +268,7 @@ class UserInterface(unittest.TestCase):
         def start(_):
             starts.append(True)
             receiver.frequency = 7074000
-            receiver.radio_state = {"mode": 1, "nr": False, "profile": DEFAULT_PROFILE}
+            receiver.radio_state = {"mode": 1, "data_mode": 1, "split": 0, "rit": 0, "xit": 0, "nr": False, "profile": DEFAULT_PROFILE}
 
         receiver.start = start
         receiver.busy = lambda: not receiver.stop.is_set()
@@ -437,7 +437,7 @@ class IcomTransmit(unittest.TestCase):
 
         response(b"\x03" + encode_frequency(7074000))
         response(b"\x04\x01\x01")
-        response(bytes.fromhex(DEFAULT_PROFILE["tx_source"]) + b"\x00")
+        response(bytes.fromhex(DEFAULT_PROFILE.get("ft8_tx_source", DEFAULT_PROFILE["tx_source"])) + b"\x00")
         response(b"\x1a\x06\x01\x02")
         for prefix in DEFAULT_PROFILE.get("tx_controls", {}).values():
             response(bytes.fromhex(prefix) + b"\x01")
@@ -448,10 +448,10 @@ class IcomTransmit(unittest.TestCase):
             civ.tick(1.03 + i * 0.03)
         self.assertFalse(civ.tx_ready(7074000))
         response(
-            bytes.fromhex(DEFAULT_PROFILE["tx_source"])
+            bytes.fromhex(DEFAULT_PROFILE.get("ft8_tx_source", DEFAULT_PROFILE["tx_source"]))
             + bytes((DEFAULT_PROFILE["tx_lan"],))
         )
-        response(b"\x1a\x06\x00\x01")
+        response(b"\x1a\x06\x01\x01")
         self.assertFalse(civ.tx_ready(7074000))
         for prefix in DEFAULT_PROFILE.get("tx_controls", {}).values():
             response(bytes.fromhex(prefix) + b"\x00")
@@ -467,7 +467,7 @@ class IcomTransmit(unittest.TestCase):
         civ.close()
         self.assertIn(b"\x1c\x00\x00", channel.sent)
         self.assertIn(
-            bytes.fromhex(DEFAULT_PROFILE["tx_source"]) + b"\x00", channel.sent
+            bytes.fromhex(DEFAULT_PROFILE.get("ft8_tx_source", DEFAULT_PROFILE["tx_source"])) + b"\x00", channel.sent
         )
         self.assertIn(b"\x1a\x06\x01\x02", channel.sent)
 

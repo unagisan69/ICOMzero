@@ -116,7 +116,9 @@ class Civ:
         self.requested_power = self.power_target = None
         self.power_applied = False
         self.power_changed = False
-        self.tx_source = bytes.fromhex(profile.get("tx_source", ""))
+        self.tx_source = bytes.fromhex(
+            profile.get("ft8_tx_source", profile.get("tx_source", ""))
+        )
         self.tx_controls = {
             name: bytes.fromhex(value)
             for name, value in profile.get("tx_controls", {}).items()
@@ -129,6 +131,8 @@ class Civ:
         self.source = self.data_mode = self.frequency = self.mode = None
         self.original_source = self.original_data = None
         self.preparing = self.prepared = False
+        self.rx_preparing = self.data_changed = False
+        self.data_filter = None
         self.ptt_state = False
         self.ptt_wanted = None
         self.ptt_pending = False
@@ -196,7 +200,8 @@ class Civ:
             and self.tuner_state != 2
             and (self.power_target is None or self.current_power == self.power_target)
             and self.source == self.profile["tx_lan"]
-            and self.data_mode == 0
+            and self.data_mode == self.profile.get("ft8_data_mode", 0)
+            and (not self.profile.get("ft8_data_mode") or self.data_filter == 1)
             and self.mode == 1
             and self.frequency == dial
             and all(self.controls.get(name) == 0 for name in self.tx_controls)
@@ -318,6 +323,24 @@ class Civ:
                     and self.current_power == self.power_target,
                 )
             if (
+                self.rx_preparing
+                and len(self.original_controls) == len(self.tx_controls)
+                and self.original_data is not None
+                and self.mode is not None
+                and not self.ptt_state
+                and not self.ptt_pending
+                and self.tuner_state != 2
+            ):
+                wanted = self.profile.get("ft8_data_mode", 0)
+                for query in self.tx_controls.values():
+                    self.schedule(query + b"\x00", urgent=True)
+                self.schedule(
+                    b"\x1a\x06" + bytes((wanted, 1 if wanted else 0)), urgent=True
+                )
+                self.schedule(b"\x06\x01\x01", urgent=True)
+                self.rx_preparing = False
+                self.data_changed = True
+            if (
                 self.preparing
                 and not self.prepared
                 and self.original_source is not None
@@ -329,7 +352,10 @@ class Civ:
                 self.schedule(
                     self.tx_source + bytes((self.profile["tx_lan"],)), urgent=True
                 )
-                self.schedule(b"\x1a\x06\x00\x01", urgent=True)
+                wanted = self.profile.get("ft8_data_mode", 0)
+                self.schedule(
+                    b"\x1a\x06" + bytes((wanted, 1 if wanted else 0)), urgent=True
+                )
                 for query in self.tx_controls.values():
                     self.schedule(query + b"\x00", urgent=True)
                 self.prepared = True
@@ -353,10 +379,12 @@ class Civ:
                     self.power_target = None
                     self.on_state("power_ready", False)
                     self.power_applied = False
-                elif action == "tuner_stop" and self.tx_enabled:
+                elif action in ("tuner_stop", "force_rx") and self.tx_enabled:
                     self.cancel_tuner()
-                    if self.ptt_state or self.ptt_pending:
+                    if action == "force_rx" or self.ptt_state or self.ptt_pending:
                         self.ptt(False)
+                elif action == "ft8_receive" and self.tx_enabled:
+                    self.rx_preparing = True
                 elif action == "ft8_prepare" and self.tx_enabled:
                     self.preparing = True
                 elif (
@@ -504,7 +532,9 @@ class Civ:
                     self.original_source = self.source
             elif self.tx_enabled and command[:2] == b"\x1a\x06" and len(command) == 4:
                 self.data_mode = command[2]
+                self.data_filter = command[3]
                 self.on_state("data_mode", self.data_mode)
+                self.on_state("data_filter", self.data_filter)
                 if self.original_data is None:
                     self.original_data = command[2:]
             elif self.tx_enabled and len(command) == 4 and command[:2] == b"\x14\x0a":
@@ -645,7 +675,7 @@ class Civ:
             else:
                 commands.append(b"\x1c\x00\x00")
             if (
-                (self.prepared or self.power_changed)
+                (self.prepared or self.power_changed or self.data_changed)
                 and not self.ptt_state
                 and not self.ptt_pending
                 and self.tuner_state != 2
