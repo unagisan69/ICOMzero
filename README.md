@@ -27,7 +27,7 @@ Connect the Cardputer to a network that can reach the radio and enable the radio
 For manual installation, download the `.deb` from [GitHub Releases](https://github.com/unagisan69/ICOMzero/releases), then install it on the Cardputer.
 
 ```sh
-sudo apt install ./icomzero_0.5.0-1_arm64.deb
+sudo apt install ./icomzero_0.5.1-1_arm64.deb
 ```
 
 Open **ICOMzero** from APPLaunch after installation.
@@ -50,9 +50,9 @@ Press **Tab** on the receiver screen to open the keyboard shortcut guide. **Tab*
 
 Choose **FT8** from the startup menu to connect and decode on **40m, 7.074 MHz USB**. **B** opens FT8 band presets; use **Z/C** and **Enter** to select. **↑/↓** scroll decoded history. **Enter** stops/restarts reception, and **Esc** returns to the menu. The decoder runs locally on the Cardputer; no computer bridge is needed.
 
-Messages show the UTC receive period, audio frequency and decoded text. Expect the first results after collecting a complete 15-second period, usually 15–30 seconds after connection. Keep the device clock synchronized with network time. Receiver noise reduction is disabled during FT8 and the prior frequency, mode and NR setting are restored when returning to the menu. Keep receiver noise blanker and notch filters off for best decoding.
+The FT8 screen shows nine decoded message rows with alternating colors. Expect the first results after collecting a complete 15-second period, usually 15–30 seconds after connection. Keep the device clock synchronized with network time. Receiver noise reduction is disabled during FT8 and the prior frequency, mode and NR setting are restored when returning to the menu. Keep receiver noise blanker and notch filters off for best decoding.
 
-Speaker volume and mute do not affect decoding. This release receives and decodes only; FT8 does not transmit, call stations, or run the antenna tuner. FT8 uses USB on every preset, including 40m. Native decoding uses [ft8_lib](https://github.com/kgoba/ft8_lib), with CRC-checked messages; sensitivity is lower than a full WSJT-X decoder, and some hashed callsigns may remain unresolved. No estimated SNR is displayed. The package is built for the Cardputer's ARM64 processor.
+FT8 reception is always silent and does not change the saved Radio volume or mute settings. This release receives and decodes only; FT8 does not transmit, call stations, or run the antenna tuner. FT8 uses USB on every preset, including 40m. Native decoding uses [ft8_lib](https://github.com/kgoba/ft8_lib), with CRC-checked messages; sensitivity is lower than a full WSJT-X decoder, and some hashed callsigns may remain unresolved. No estimated SNR is displayed. The package is built for the Cardputer's ARM64 processor.
 
 ## Build and test
 
@@ -64,7 +64,7 @@ sudo apt install build-essential python3-pil python3-numpy
 make check
 make test
 make package
-sudo apt install ./build/icomzero_0.5.0-1_arm64.deb
+sudo apt install ./build/icomzero_0.5.1-1_arm64.deb
 ```
 
 Use `make package APPBUILDER=/path/to/AppBuilder` for another checkout location. The package includes a foreground APPLaunch entry and declares its Python, Pillow, NumPy, font, ALSA, and PipeWire dependencies.

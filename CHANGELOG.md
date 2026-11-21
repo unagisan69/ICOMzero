@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.1 — 2026-11-21
+
+- Show nine FT8 decodes per page with alternating row and text colors.
+- Remove the FT8 heading, timestamps, audio frequencies and last-cycle status row.
+- Keep FT8 reception silent without opening the speaker or changing saved Radio volume/mute settings.
+
 ## 0.5.0 — 2026-11-21
 
 - Add a Radio / FT8 startup menu and receive-only FT8 message screen.

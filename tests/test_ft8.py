@@ -82,3 +82,26 @@ class RadioModeShortcut(unittest.TestCase):
             os.close(write)
         self.assertEqual(commands, [("mode", 1), ("mode", 0)])
         self.assertEqual(receiver.frequency, 7074000)
+
+
+class SilentReception(unittest.TestCase):
+    def test_ft8_audio_reaches_decoder_without_opening_speaker(self):
+        import runpy
+        module = runpy.run_path(str(Path(__file__).resolve().parents[1] / "app/icomzero"))
+        raw = np.arange(480, dtype="<i2").tobytes()
+        captured = []
+        def listen(*args, **kwargs):
+            args[6](raw)
+            args[4].set()
+        with patch.dict(module["Receiver"].run.__globals__, {"listen": listen}), patch("subprocess.Popen") as player:
+            receiver = module["Receiver"]()
+            receiver.volume, receiver.muted = 35, False
+            receiver.play_audio = False
+            receiver.audio_observer = captured.append
+            receiver.start(("192.0.2.1", 50001, "user", "password"))
+            receiver.thread.join(2)
+        player.assert_not_called()
+        self.assertEqual(captured, [raw])
+        self.assertEqual(receiver.packets, 1)
+        self.assertEqual((receiver.volume, receiver.muted), (35, False))
+        self.assertFalse(receiver.busy())

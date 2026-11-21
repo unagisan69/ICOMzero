@@ -1,12 +1,12 @@
 {
   "package_name": "icomzero",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "app_name": "ICOMzero",
   "bin_name": "icomzero",
   "description": "Direct network audio, waterfall and receive tuning for Icom and Kenwood radios",
   "store": {
     "summary": "Direct radio audio, waterfall, tuning and local FT8 receive decoding.",
-    "description": "Choose Radio for listening and tuning, or FT8 for local receive-only message decoding. FT8 starts on 40m at 7.074 MHz USB, with band presets and UTC history. Requires synchronized device time; no FT8 transmission. Connect directly to supported network radios from a Cardputer Zero for receive audio, live spectrum and waterfall, and tuning. Icom profiles cover IC-705, IC-7300MK2, IC-7610, IC-7760, IC-7850/7851, IC-905, IC-9700 and IC-R8600. Kenwood TS-890S uses native KNS TCP/RTP. Select the radio in Setup; band presets and controls follow model capabilities. Noise reduction and antenna tuning are available where supported. T starts the antenna tuner and briefly transmits. Requires a radio network account. IC-7300MK2 is hardware-tested; added models have protocol/emulator coverage and await physical validation. Credentials and volume settings are stored locally with user-only permissions.",
+    "description": "Choose Radio for listening and tuning, or FT8 for local receive-only message decoding. FT8 starts on 40m at 7.074 MHz USB, with band presets, nine alternating-color message rows and silent reception. Requires synchronized device time; no FT8 transmission. Connect directly to supported network radios from a Cardputer Zero for receive audio, live spectrum and waterfall, and tuning. Icom profiles cover IC-705, IC-7300MK2, IC-7610, IC-7760, IC-7850/7851, IC-905, IC-9700 and IC-R8600. Kenwood TS-890S uses native KNS TCP/RTP. Select the radio in Setup; band presets and controls follow model capabilities. Noise reduction and antenna tuning are available where supported. T starts the antenna tuner and briefly transmits. Requires a radio network account. IC-7300MK2 is hardware-tested; added models have protocol/emulator coverage and await physical validation. Credentials and volume settings are stored locally with user-only permissions.",
     "categories": [
       "Radio & Comms"
     ],
