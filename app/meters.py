@@ -1,6 +1,8 @@
 """Model-calibrated telemetry and latched RF protection in the transport thread."""
 
 import time
+from collections import deque
+from statistics import median
 
 
 def interpolate(points, value):
@@ -24,12 +26,19 @@ class Protection:
         self.tuning = False
         self.alc_since = None
         self.fault = None
+        self.power_window = deque(maxlen=3)
+        self.power_display = None
+        self.power_trace = []
 
     def begin(self, tuning=False, now=None):
         self.started = time.monotonic() if now is None else now
         self.tuning = tuning
         self.samples.clear()
         self.alc_since = None
+        self.power_window.clear()
+        self.power_display = None
+        self.power_trace = []
+        self.publish("watts_display", None)
         for name in ("swr", "alc", "watts"):
             self.publish(name, None)
             self.publish(name + "_at", None)
@@ -46,6 +55,17 @@ class Protection:
         self.samples[name] = (value, now)
         self.publish(name, value)
         self.publish(name + "_at", now)
+        if name == "watts":
+            if self.power_display is None or (self.power_display == 0 and value > 0):
+                self.power_window.clear()
+                self.power_display = value
+            self.power_window.append(value)
+            target = median(self.power_window)
+            self.power_display += 0.4 * (target - self.power_display)
+            self.publish("watts_display", self.power_display)
+            if self.started is not None:
+                self.power_trace.append((now, value))
+                self.power_trace = self.power_trace[-128:]
 
     def trip(self, reason):
         if not self.fault:
@@ -55,6 +75,22 @@ class Protection:
 
     def end(self):
         """Confirmed RX ends this RF episode; keep any fault latched."""
+        if self.started is not None and self.power_trace and not self.tuning:
+            now = time.monotonic()
+            steady = [
+                v for t, v in self.power_trace if self.started + 1 <= t <= now - 0.6
+            ]
+            if steady:
+                self.publish(
+                    "power_summary",
+                    {
+                        "at": now,
+                        "samples": len(steady),
+                        "min_w": min(steady),
+                        "max_w": max(steady),
+                        "median_w": median(steady),
+                    },
+                )
         self.started = None
         self.alc_since = None
 

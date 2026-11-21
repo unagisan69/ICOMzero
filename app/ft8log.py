@@ -22,7 +22,7 @@ def directory():
 DEFAULTS = {
     "callsign": "",
     "grid": "",
-    "tx_hz": "1500",
+    "tx_hz": "Auto",
     "tx_level": "50",
     "tx_power_w": "10",
     "cq_period": "Even",
@@ -50,8 +50,11 @@ def validate_station(settings):
         raise ValueError("Enter a valid callsign")
     if not re.fullmatch(r"[A-R]{2}[0-9]{2}(?:[A-X]{2})?", settings["grid"]):
         raise ValueError("Enter a 4 or 6 character grid")
-    if not 200 <= int(settings["tx_hz"]) <= 2800:
-        raise ValueError("TX audio must be 200–2800 Hz")
+    if (
+        str(settings["tx_hz"]).strip().lower() != "auto"
+        and not 200 <= int(settings["tx_hz"]) <= 2800
+    ):
+        raise ValueError("TX audio must be Auto or 200–2800 Hz")
     if not 1 <= int(settings.get("tx_power_w", "10")) <= 200:
         raise ValueError("TX power must be 1–200 W (radio limit applies)")
     if not 10 <= int(settings.get("tx_level", "50")) <= 80:
@@ -88,7 +91,7 @@ def request(url, data, form=False):
                 "application/x-www-form-urlencoded" if form else "application/json"
             ),
             "Accept": "application/json",
-            "User-Agent": "ICOMzero/0.6.0",
+            "User-Agent": "ICOMzero/0.8.0",
         },
     )
     with urllib.request.urlopen(req, timeout=10) as response:
@@ -189,6 +192,17 @@ class Logbook:
     def add(self, qso):
         settings = load_settings()
         with self.db() as db:
+            for (payload,) in db.execute(
+                "SELECT payload FROM qsos ORDER BY rowid DESC LIMIT 100"
+            ):
+                prior = json.loads(payload)
+                if prior["id"] == qso["id"] or (
+                    all(prior[k] == qso[k] for k in ("call", "own_call", "dial"))
+                    and prior["start"] <= qso["end"]
+                    and qso["start"] <= prior["end"]
+                ):
+                    self.status = "QSO already logged"
+                    return False
             db.execute(
                 "INSERT OR IGNORE INTO qsos VALUES (?,?,?)",
                 (qso["id"], json.dumps(qso), adif(qso)),
@@ -201,6 +215,7 @@ class Logbook:
                     )
         self.status = "Contact saved locally"
         self.wake.set()
+        return True
 
     def recent(self):
         with self.db() as db:

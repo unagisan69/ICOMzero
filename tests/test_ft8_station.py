@@ -695,7 +695,7 @@ class TransportWaveform(unittest.TestCase):
             "CQ K1ABC FN42",
             {text for _, _, text in decode(capture.astype("<i2").tobytes())},
         )
-        sequence = Sequencer(SETTINGS, lambda _: None)
+        sequence = Sequencer({**SETTINGS, "tx_hz":"1500"}, lambda _: None)
         now = time.time()
         message = Message(int(now // 15) - 1, 300, "CQ W1AW FN31", -10)
         sequence.reply(message, 7074000)

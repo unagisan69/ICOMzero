@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.8.0 — 2026-11-21
+
+- Reveal local TX rows after the complete 15-second period, show a red armed dot, and animate the UTC progress bar in red while transmitting.
+- Continue highlighted contacts from their latest grid/report/acknowledgment stage, including R-report → RRR, with retained known reports and opposite-slot timing.
+- Default TX audio frequency to Auto: follow the selected station’s offset, or use 1500 Hz for an unanswered own CQ. Numeric manual settings remain supported.
+- Add selected-decode Record QSO review/save with required exchanged reports and duplicate protection; reuse the existing Wavelog/QRZ outboxes.
+- Show a green QSO-saved popup after a new local save.
+- Smooth and round the watt readout while retaining raw safety meters and private steady-power diagnostics.
+
 ## 0.7.5 — 2026-11-21
 
 - End RF telemetry assessment when RX is confirmed, keeping any real fault latched. Begin a new episode only when the next PTT-on is sent.

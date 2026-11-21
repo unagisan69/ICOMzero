@@ -780,19 +780,18 @@ def ft8_frame(
             fill=MUTED,
         )
     draw.rectangle((12, 146, 307, 148), fill=CARD)
-    draw.rectangle((12, 146, 12 + int(progress * 295), 148), fill=GREEN)
+    draw.rectangle(
+        (12, 146, 12 + int(progress * 295), 148),
+        fill="#f06464" if transmitting else GREEN,
+    )
     draw.text(
         (231, 152),
         "Tab - Menu",
         font=display.fonts["small"],
         fill="#ff8f8f" if transmitting else MUTED,
     )
-    draw.text(
-        (5, 152),
-        "ARM" if armed else "OFF",
-        font=display.fonts["small"],
-        fill=GREEN if armed else MUTED,
-    )
+    if armed:
+        draw.ellipse((14, 157, 22, 165), fill="#f06464")
     draw.rounded_rectangle(
         (36, 151, 61, 168), 3, fill="#8a2424" if transmitting else CARD
     )
@@ -815,6 +814,12 @@ def ft8_frame(
 
     swr = fresh("swr")
     watts = fresh("watts")
+    if watts is not None:
+        watts = (
+            meters.get("watts_display")
+            if meters.get("watts_display") is not None
+            else watts
+        )
     draw.text(
         (67, 152),
         f"SWR {swr:.1f}" if swr is not None and (transmitting or fault) else "SWR —",
@@ -822,7 +827,7 @@ def ft8_frame(
         fill=WHITE if transmitting else MUTED,
     )
     power = (
-        (f"{watts:.1f}W" if watts is not None else "—W")
+        (f"{watts:.0f}W" if watts is not None else "—W")
         if transmitting
         else f"{power_set}W set"
     )
@@ -841,6 +846,22 @@ def ft8_frame(
     return image
 
 
+def qso_popup(display, image, qso):
+    draw = ImageDraw.Draw(image)
+    draw.rounded_rectangle(
+        (20, 46, 300, 123), 10, fill="#123f30", outline=GREEN, width=2
+    )
+    draw.text((35, 54), "✓ QSO saved", font=display.fonts["body"], fill="#b6f7ce")
+    draw.text((35, 74), qso["call"], font=display.fonts["title"], fill=WHITE)
+    draw.text(
+        (35, 103),
+        f"{qso.get('band','')} · Saved to your log",
+        font=display.fonts["small"],
+        fill="#b6f7ce",
+    )
+    return image
+
+
 def ft8_ui(lcd, keyboard):
     from ft8 import BANDS, Decoder, History
     from ft8log import (
@@ -851,6 +872,7 @@ def ft8_ui(lcd, keyboard):
         test_service,
     )
     from ft8station import Station
+    from ft8qso import contact_draft, finalize_contact
 
     display = Display(lcd)
     values = load()
@@ -883,6 +905,11 @@ def ft8_ui(lcd, keyboard):
     toast_until = 0
     last_frame = 0
     last_station_status = "Receive only"
+    qso_revision = 0
+    qso_until = 0
+    saved_qso = None
+    manual_form = None
+    manual_meta = None
     held = None
     next_repeat = 0
     menu_items = [
@@ -891,6 +918,7 @@ def ft8_ui(lcd, keyboard):
         "Settings",
         "Stop Transmit",
         "Logging",
+        "Record QSO",
         "Tune antenna",
         "Clear warning",
         "Help",
@@ -920,6 +948,13 @@ def ft8_ui(lcd, keyboard):
             ("Enabled", "wavelog_enabled"),
         ],
         "qrz": [("API key", "qrz_key"), ("Enabled", "qrz_enabled")],
+        "manual": [
+            ("Call", "call"),
+            ("Grid", "grid"),
+            ("Sent dB", "sent"),
+            ("Received dB", "received"),
+            ("Save QSO", "save"),
+        ],
     }
 
     def notify(message):
@@ -971,6 +1006,10 @@ def ft8_ui(lcd, keyboard):
         rx.start(connection(values))
         while True:
             now = time.monotonic()
+            if getattr(station, "qso_revision", 0) != qso_revision:
+                qso_revision = station.qso_revision
+                saved_qso = station.saved_qso
+                qso_until = now + 3.5
             if station.status != last_station_status:
                 last_station_status = station.status
                 if not station.active and station.status not in (
@@ -1066,6 +1105,7 @@ def ft8_ui(lcd, keyboard):
                         "qrz": "QRZ",
                         "local": "Local contacts",
                         "help": "FT8 shortcuts",
+                        "manual": "Record QSO",
                     }[panel]
                     subtitle = (
                         station.clock_status
@@ -1076,16 +1116,23 @@ def ft8_ui(lcd, keyboard):
                             else "Enter edit · Esc back"
                         )
                     )
+                    if panel == "menu" and history.current() is not None:
+                        title = "Selected decode"
+                        subtitle = history.current().text
+                    if panel == "manual":
+                        subtitle = "Review exchanged reports, then save"
                     image, draw = menu_frame(display, title, subtitle[:43])
                     if panel in ("menu", "logging"):
-                        items = menu_items if panel == "menu" else log_items
+                        items = list(menu_items) if panel == "menu" else log_items
+                        if panel == "menu" and history.current() is not None:
+                            items[1] = "Reply / continue"
                     elif panel == "help":
                         items = [
                             "F / Fn+F: previous decode",
                             "X / Fn+X: next decode",
                             "Enter: answer selected CQ",
                             "Gold rows: your callsign",
-                            "Call CQ: start your own CQ",
+                            "Auto Hz: follow selected signal",
                             "Esc / Stop Transmit: stop TX",
                         ]
                     elif panel == "local":
@@ -1096,7 +1143,12 @@ def ft8_ui(lcd, keyboard):
                     else:
                         items = []
                         for label, key in fields[panel]:
-                            value = settings[key]
+                            if key == "save":
+                                items.append(label)
+                                continue
+                            value = (manual_form if panel == "manual" else settings)[
+                                key
+                            ]
                             if isinstance(value, bool):
                                 value = "On" if value else "Off"
                             elif key.endswith("_key"):
@@ -1144,15 +1196,18 @@ def ft8_ui(lcd, keyboard):
                         fill=MUTED,
                     )
                 else:
+                    transmitting = bool(
+                        rx.radio_state.get("ptt", False)
+                        or rx.radio_state.get("tuner") == 2
+                    )
                     image = ft8_frame(
                         display,
                         history,
                         settings["callsign"],
                         ready,
                         rx.status,
-                        progress,
-                        rx.radio_state.get("ptt", False)
-                        or rx.radio_state.get("tuner") == 2,
+                        (time.time() % 15) / 15 if transmitting else progress,
+                        transmitting,
                         armed=station.active,
                         meters=rx.radio_state,
                         power_set=int(settings["tx_power_w"]),
@@ -1164,6 +1219,8 @@ def ft8_ui(lcd, keyboard):
                         draw.text(
                             (8, 1), toast[:43], font=display.fonts["small"], fill=GREEN
                         )
+                if saved_qso and now < qso_until and not rx.radio_state.get("tx_fault"):
+                    image = qso_popup(display, image, saved_qso)
                 display.present(image)
                 last_frame = now
             for key, pressed in keys_ready(keyboard, 0.01):
@@ -1179,8 +1236,9 @@ def ft8_ui(lcd, keyboard):
                     continue
                 if editing:
                     label, field = fields[panel][choice]
+                    editing_values = manual_form if panel == "manual" else settings
                     if key == 1:
-                        settings[field] = original
+                        editing_values[field] = original
                         editing = False
                     elif key == 28 and pressed == 1:
                         try:
@@ -1203,22 +1261,25 @@ def ft8_ui(lcd, keyboard):
                             if field == "tx_power_w":
                                 maximum = profile.get("rated_power_w", 100)
                                 minimum = 5 if profile["model"] == "TS-890S" else 1
-                                if int(settings[field]) < minimum:
+                                if int(editing_values[field]) < minimum:
                                     raise ValueError(f"Radio minimum is {minimum} W")
-                                if int(settings[field]) > maximum:
+                                if int(editing_values[field]) > maximum:
                                     raise ValueError(f"Radio maximum is {maximum} W")
-                                rx.command("ft8_power", int(settings[field]))
-                            save_settings(settings)
+                                rx.command("ft8_power", int(editing_values[field]))
+                            if panel != "manual":
+                                if str(settings["tx_hz"]).strip().lower() == "auto":
+                                    settings["tx_hz"] = "Auto"
+                                save_settings(settings)
                             editing = False
                         except ValueError as error:
                             notify(error)
                     elif key == 14:
-                        settings[field] = settings[field][:-1]
+                        editing_values[field] = editing_values[field][:-1]
                     elif key in KEYS:
                         char = KEYS[key]
                         char = SHIFTED.get(char, char.upper()) if shift else char
-                        if len(settings[field]) < 256:
-                            settings[field] += char
+                        if len(editing_values[field]) < 256:
+                            editing_values[field] += char
                     continue
                 direction = (
                     -1
@@ -1277,9 +1338,15 @@ def ft8_ui(lcd, keyboard):
                                 )
                                 panel = None
                             elif action == "Call CQ":
-                                station.action("cq", dial=dial)
+                                selected = history.current()
+                                if selected is not None:
+                                    station.action("reply", selected, dial)
+                                    history.follow_bottom()
+                                    notify("Continuing selected contact")
+                                else:
+                                    station.action("cq", dial=dial)
+                                    notify("Calling CQ on next transmit period")
                                 panel = None
-                                notify("Calling CQ on next transmit period")
                             elif action == "Settings":
                                 stop_tx()
                                 show_panel("station")
@@ -1289,6 +1356,35 @@ def ft8_ui(lcd, keyboard):
                                 panel = None
                             elif action == "Logging":
                                 show_panel("logging")
+                            elif action == "Record QSO":
+                                selected = history.current()
+                                if selected is None:
+                                    notify("Highlight a contact decode first")
+                                else:
+                                    try:
+                                        stop_tx()
+                                        manual_meta = contact_draft(
+                                            settings,
+                                            decoder.snapshot()[0],
+                                            selected,
+                                            dial,
+                                        )
+                                        manual_form = {
+                                            k: (
+                                                ""
+                                                if manual_meta[k] is None
+                                                else str(manual_meta[k])
+                                            )
+                                            for k in (
+                                                "call",
+                                                "grid",
+                                                "sent",
+                                                "received",
+                                            )
+                                        }
+                                        show_panel("manual")
+                                    except ValueError as error:
+                                        notify(error)
                             elif action == "Tune antenna":
                                 station.action("tune", dial=dial)
                                 panel = None
@@ -1316,7 +1412,22 @@ def ft8_ui(lcd, keyboard):
                                 show_panel("menu")
                         elif panel in fields:
                             field = fields[panel][choice][1]
-                            if isinstance(settings[field], bool):
+                            if panel == "manual":
+                                if field == "save":
+                                    try:
+                                        qso = finalize_contact(
+                                            {**manual_meta, **manual_form}
+                                        )
+                                        station.action("record_qso", qso, dial)
+                                        history.follow_bottom()
+                                        panel = None
+                                        notify("Saving QSO…")
+                                    except ValueError as error:
+                                        notify(error)
+                                else:
+                                    original = manual_form[field]
+                                    editing = True
+                            elif isinstance(settings[field], bool):
                                 settings[field] = not settings[field]
                                 save_settings(settings)
                             elif field == "cq_period":

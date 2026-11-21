@@ -6,7 +6,7 @@ import subprocess
 import time
 import numpy as np
 from ft8 import decoder_path, BANDS
-from ft8log import validate_station
+from ft8log import validate_station, DEFAULTS
 
 
 def waveform(message, hz, rate=48000, level=50):
@@ -35,6 +35,132 @@ def call_fields(message):
     return (parts[1], parts[2]) if len(parts) == 3 else ("", "")
 
 
+def tx_frequency(settings, message=None):
+    value = str(settings.get("tx_hz", "Auto")).strip()
+    hz = (
+        (1500 if message is None else round(message.hz))
+        if value.lower() == "auto"
+        else int(value)
+    )
+    if not 200 <= hz <= 2800:
+        raise ValueError("TX audio must be 200–2800 Hz")
+    return hz
+
+
+def latest_reply(message, messages, own_call):
+    partner, _ = call_fields(message)
+    candidates = [
+        m
+        for m in messages
+        if not m.local_tx
+        and m.slot >= message.slot
+        and call_fields(m)[0] == partner
+        and (m.text.startswith("CQ ") or m.text.startswith(own_call + " "))
+    ]
+    return max(candidates, key=lambda m: m.slot, default=message)
+
+
+def contact_draft(settings, messages, selected, dial):
+    """Recover actual exchanged reports; never invent a missing report."""
+    if selected.local_tx:
+        parts = selected.text.split()
+        partner = (
+            parts[0] if len(parts) == 3 and parts[1] == settings["callsign"] else ""
+        )
+    else:
+        partner, _ = call_fields(selected)
+    if (
+        not re.fullmatch(r"[A-Z0-9/]*[0-9][A-Z0-9/]+", partner)
+        or partner == settings["callsign"]
+    ):
+        raise ValueError("Select a station's CQ or conversation")
+    own = settings["callsign"]
+    messages = list(messages)
+    if selected not in messages:
+        messages.append(selected)
+    cqs = [
+        m.slot
+        for m in messages
+        if (
+            not m.local_tx and m.text.startswith("CQ ") and call_fields(m)[0] == partner
+        )
+        or (m.local_tx and m.text.startswith("CQ " + own + " "))
+    ]
+    lower = max([selected.slot - 12] + [slot for slot in cqs if slot <= selected.slot])
+    upper = min(
+        [selected.slot + 12] + [slot - 1 for slot in cqs if slot > selected.slot]
+    )
+    rows = sorted(
+        (m for m in messages if lower <= m.slot <= upper), key=lambda m: m.slot
+    )
+    related = []
+    sent = received = None
+    grid = ""
+    for m in rows:
+        parts = m.text.replace("<", "").replace(">", "").split()
+        if m.text.startswith("CQ ") and call_fields(m)[0] == partner:
+            extra = call_fields(m)[1]
+            if re.fullmatch(r"[A-R]{2}[0-9]{2}", extra):
+                grid = extra
+        if len(parts) != 3:
+            continue
+        outgoing = m.local_tx and parts[:2] == [partner, own]
+        incoming = not m.local_tx and parts[:2] == [own, partner]
+        if not (outgoing or incoming):
+            continue
+        related.append(m)
+        extra = parts[2]
+        if re.fullmatch(r"R?[+-][0-9]{2}", extra):
+            report = int(extra.lstrip("R"))
+            if outgoing:
+                sent = report
+            else:
+                received = report
+        if (
+            incoming
+            and extra not in ("RRR", "RR73", "R73", "73")
+            and re.fullmatch(r"[A-R]{2}[0-9]{2}", extra)
+        ):
+            grid = extra
+    slots = [m.slot for m in related] or [selected.slot]
+    return dict(
+        call=partner,
+        own_call=own,
+        own_grid=settings["grid"],
+        grid=grid,
+        dial=dial,
+        band=next((n for n, f in BANDS if f == dial), ""),
+        start=min(slots) * 15 + 0.5,
+        end=max(slots) * 15 + 13.14,
+        sent=sent,
+        received=received,
+    )
+
+
+def finalize_contact(draft):
+    q = dict(draft)
+    validate_station({**DEFAULTS, "callsign": q["own_call"], "grid": q["own_grid"]})
+    q["call"] = str(q["call"]).strip().upper()
+    q["grid"] = str(q.get("grid", "")).strip().upper()
+    if (
+        not re.fullmatch(r"[A-Z0-9/]*[0-9][A-Z0-9/]+", q["call"])
+        or q["call"] == q["own_call"]
+    ):
+        raise ValueError("Enter the contacted station's callsign")
+    if q["grid"] and not re.fullmatch(r"[A-R]{2}[0-9]{2}(?:[A-X]{2})?", q["grid"]):
+        raise ValueError("Enter a valid grid or leave it empty")
+    for name in ("sent", "received"):
+        try:
+            q[name] = int(q[name])
+        except (TypeError, ValueError):
+            raise ValueError("Enter both exchanged reports") from None
+        if not -50 <= q[name] <= 49:
+            raise ValueError("Reports must be -50 to +49 dB")
+    identity = f"{q['own_call']}|{q['call']}|{q['dial']}|{int(q['start'])}"
+    q["id"] = hashlib.sha256(identity.encode()).hexdigest()[:24]
+    return q
+
+
 class Sequencer:
     def __init__(self, settings, complete):
         self.settings = dict(settings)
@@ -47,7 +173,7 @@ class Sequencer:
         self.message = ""
         self.stage = "idle"
         self.parity = 0
-        self.hz = int(settings["tx_hz"])
+        self.hz = tx_frequency(settings)
         self.start = 0
         self.last_slot = None
         self.last_rx = None
@@ -96,14 +222,16 @@ class Sequencer:
         self.begin(dial)
         self.parity = int(self.settings["cq_period"] == "Odd")
         self.stage = "cq"
-        self.hz = int(self.settings["tx_hz"])
+        self.hz = tx_frequency(self.settings)
         self.message = f"CQ {self.settings['callsign']} {self.settings['grid'][:4]}"
         self.status = "Next: " + self.message
 
-    def reply(self, message, dial):
+    def reply(self, message, dial, history=()):
         if message.local_tx:
             raise ValueError("Select a received decode, not a local TX row")
-        if time.time() - message.slot * 15 > 120:
+        message = latest_reply(message, history, self.settings["callsign"])
+        age = time.time() - message.slot * 15
+        if not -2 <= age <= 120:
             raise ValueError("Choose a recent decode")
         partner, extra = call_fields(message)
         if (
@@ -116,18 +244,61 @@ class Sequencer:
             self.settings["callsign"] + " "
         ):
             raise ValueError("Decode is not addressed to you")
+        hz = tx_frequency(self.settings, message)
+        draft = contact_draft(self.settings, history, message, dial)
+        continuing = (
+            self.partner == partner
+            and not message.text.startswith("CQ ")
+            and self.dial == dial
+            and time.time() - self.start <= 180
+        )
+        old = dict(
+            sent=self.sent,
+            received=self.received,
+            grid=self.grid,
+            qso_start=self.qso_start,
+            start=self.start,
+            last_slot=self.last_slot,
+        )
         self.begin(dial)
         self.partner = partner
-        self.grid = extra if re.fullmatch("[A-R]{2}[0-9]{2}", extra) else ""
-        self.sent = max(-50, min(49, message.snr))
+        self.grid = (old["grid"] if continuing else "") or draft["grid"]
+        self.sent = (
+            old["sent"] if continuing and old["sent"] is not None else draft["sent"]
+        )
+        self.received = (
+            old["received"]
+            if continuing and old["received"] is not None
+            else draft["received"]
+        )
         self.parity = 1 - message.slot % 2
-        self.hz = int(self.settings["tx_hz"])
+        self.hz = hz
         self.last_rx = message.slot
-        self.set_message("grid", self.settings["grid"][:4])
-        # A directed report can be answered immediately with an R-report.
-        if re.fullmatch("[+-][0-9]{2}", extra):
+        if continuing:
+            self.qso_start = old["qso_start"]
+            self.start = old["start"]
+            self.last_slot = old["last_slot"]
+        if message.text.startswith("CQ "):
+            self.received = None
+            self.sent = max(-50, min(49, message.snr))
+            self.set_message("grid", self.settings["grid"][:4])
+        elif extra in ("RRR", "RR73", "R73", "73"):
+            self.final_seen = True
+            self.set_message("73", "73")
+        elif re.fullmatch(r"[A-R]{2}[0-9]{2}", extra):
+            self.grid = extra
+            self.sent = max(-50, min(49, message.snr))
+            self.set_message("report", f"{self.sent:+03d}")
+        elif re.fullmatch(r"[+-][0-9]{2}", extra):
             self.received = int(extra)
+            self.sent = max(-50, min(49, message.snr))
             self.set_message("rreport", f"R{self.sent:+03d}")
+        elif re.fullmatch(r"R[+-][0-9]{2}", extra):
+            self.received = int(extra[1:])
+            self.set_message("rrr", "RRR")
+        else:
+            self.stop("Unrecognized contact stage")
+            raise ValueError("Select a CQ, grid, report or acknowledgment")
 
     def receive(self, m):
         if m.local_tx or not self.enabled or m.key in self.seen:
@@ -144,9 +315,14 @@ class Sequencer:
             return
         partner, extra = parts[1:]
         if self.stage == "cq" and re.fullmatch("[A-Z0-9/]+", partner):
+            if extra in ("RRR", "RR73", "R73", "73") or not (
+                re.fullmatch(r"[A-R]{2}[0-9]{2}", extra)
+                or re.fullmatch(r"[+-][0-9]{2}", extra)
+            ):
+                return
             self.partner = partner
             self.parity = 1 - m.slot % 2
-            self.hz = int(self.settings["tx_hz"])
+            self.hz = tx_frequency(self.settings, m)
             self.sent = max(-50, min(49, m.snr))
             self.last_rx = m.slot
             if re.fullmatch("[A-R]{2}[0-9]{2}", extra):
@@ -243,5 +419,5 @@ class Sequencer:
             "sent": self.sent,
             "received": self.received,
         }
-        self.complete(qso)
-        self.stop("Logged " + self.partner)
+        added = self.complete(qso)
+        self.stop(("Already logged " if added is False else "Logged ") + self.partner)

@@ -7,7 +7,7 @@ import os
 import subprocess
 import threading
 import time
-from ft8qso import Sequencer, waveform
+from ft8qso import Sequencer, waveform, finalize_contact
 from ft8log import load_settings, directory
 
 
@@ -86,6 +86,28 @@ def record_fault(receiver, reason, job=None):
         pass
 
 
+def record_power_summary(receiver, summary):
+    try:
+        root = directory()
+        root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        path = root / "rf-power.jsonl"
+        if path.exists() and path.stat().st_size > 131072:
+            path.replace(root / "rf-power.previous.jsonl")
+        data = {
+            **summary,
+            "utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "frequency": receiver.frequency,
+            "model": receiver.radio_state.get("profile", {}).get("model"),
+            "power_control": receiver.radio_state.get("tx_power"),
+        }
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        with os.fdopen(fd, "a") as stream:
+            os.fchmod(stream.fileno(), 0o600)
+            stream.write(json.dumps(data) + "\n")
+    except (OSError, TypeError, ValueError):
+        pass
+
+
 class Station:
     def __init__(self, receiver, decoder, logbook):
         self.receiver = receiver
@@ -102,9 +124,18 @@ class Station:
         self.tune_deadline = 0
         self.clock_status = "Checking clock"
         self.clock_ok = False
-        self.sequence = Sequencer(load_settings(), logbook.add)
+        self.qso_revision = 0
+        self.saved_qso = None
+        self.sequence = Sequencer(load_settings(), self.complete_contact)
         self.thread = threading.Thread(target=self.run, daemon=True)
         self.thread.start()
+
+    def complete_contact(self, qso):
+        added = self.logbook.add(qso)
+        if added is not False:
+            self.saved_qso = dict(qso)
+            self.qso_revision += 1
+        return added
 
     def action(self, action, value=None, dial=7074000):
         if action in ("cq", "reply") and self.tuning:
@@ -112,7 +143,7 @@ class Station:
             return
         self.version += 1
         self.receiver.stop_tx()
-        if action in ("stop", "tune"):
+        if action in ("stop", "tune", "record_qso"):
             self.receiver.command("tuner_stop")
         self.commands.put((self.version, action, value, dial))
         if action == "tune":
@@ -133,6 +164,8 @@ class Station:
         clock_at = 0
         clearing_at = None
         logged_fault = None
+        deferred_tx = []
+        power_summary_at = 0
         last_wall, last_mono = time.time(), time.monotonic()
         while not self.closed.wait(0.03):
             wall, mono = time.time(), time.monotonic()
@@ -146,6 +179,19 @@ class Station:
                 if not self.clock_ok and self.sequence.enabled:
                     self.receiver.stop_tx()
                     self.sequence.stop(self.clock_status)
+            if (
+                job is not None
+                and job.started.is_set()
+                and not getattr(job, "listed", False)
+            ):
+                deferred_tx.append(
+                    (pending[3] + 1, pending[3], self.sequence.hz, pending[2])
+                )
+                job.listed = True
+            for item in deferred_tx[:]:
+                if time.time() >= item[0] * 15:
+                    self.decoder.record_tx(item[1], item[2], item[3])
+                    deferred_tx.remove(item)
             try:
                 while True:
                     current, action, value, dial = self.commands.get_nowait()
@@ -162,6 +208,15 @@ class Station:
                         clearing_at = time.monotonic()
                         self.status = "Waiting for confirmed RX"
                         self.sequence.status = self.status
+                        continue
+                    if action == "record_qso":
+                        qso = finalize_contact(value)
+                        qso["manual"] = True
+                        added = self.complete_contact(qso)
+                        self.sequence.status = (
+                            "Already logged " if added is False else "Logged "
+                        ) + qso["call"]
+                        self.tuning = False
                         continue
                     if self.receiver.radio_state.get("tx_fault"):
                         raise ValueError("Clear the RF warning in Menu first")
@@ -194,7 +249,7 @@ class Station:
                     if action == "cq":
                         self.sequence.cq(dial)
                     elif action == "reply":
-                        self.sequence.reply(value, dial)
+                        self.sequence.reply(value, dial, self.decoder.snapshot()[0])
                     self.receiver.command(
                         "ft8_power", int(self.sequence.settings["tx_power_w"])
                     )
@@ -214,13 +269,10 @@ class Station:
             ):
                 self.receiver.stop_tx()
                 self.sequence.stop("Radio disconnected")
-            if (
-                job is not None
-                and job.started.is_set()
-                and not getattr(job, "listed", False)
-            ):
-                self.decoder.record_tx(pending[3], self.sequence.hz, pending[2])
-                job.listed = True
+            summary = self.receiver.radio_state.get("power_summary")
+            if summary and summary.get("at", 0) > power_summary_at:
+                power_summary_at = summary["at"]
+                record_power_summary(self.receiver, summary)
             fault = self.receiver.radio_state.get("tx_fault")
             if fault and fault != logged_fault:
                 record_fault(self.receiver, fault)
