@@ -1,12 +1,12 @@
-"""IC-7300MK2 frequency and spectrum commands on the Icom CAT channel."""
+"""Native Icom frequency, controls and spectrum transport."""
 
 import struct
 import time
 
+from models import DEFAULT_PROFILE, MIN_HZ, MAX_HZ
+
 CONTROLLER = 0xe0
 SCOPE_DESTINATION = 0xe1
-SCOPE_BINS = 475
-MIN_HZ, MAX_HZ = 30_000, 74_800_000
 
 
 def decode_frequency(data):
@@ -16,11 +16,14 @@ def decode_frequency(data):
 
 
 def encode_frequency(hz):
-    return bytes.fromhex(f"{hz:010d}")[::-1]
+    digits = 12 if hz >= 10_000_000_000 else 10
+    return bytes.fromhex(f"{hz:0{digits}d}")[::-1]
 
 
 class Scope:
-    def __init__(self):
+    def __init__(self, profile=DEFAULT_PROFILE):
+        self.profile = profile
+        self.total = 0
         self.edges = None
         self.next_part = 0
         self.bins = bytearray()
@@ -28,13 +31,18 @@ class Scope:
     def parse(self, data):
         if len(data) < 2:
             return None
-        part, total = data[:2]
+        part, total = (decode_frequency(bytes((v,))) for v in data[:2])
+        if part is None or total is None or not 1 <= part <= total <= 99:
+            self.next_part = 0
+            return None
         if part == 1:
             self.bins.clear()
             self.next_part = 0
-            if len(data) < 14 or data[13]:
+            size = 6 if self.profile["model"] == "IC-905" and len(data) in (16, 491) else 5
+            header_size = 4 + 2 * size
+            if len(data) < header_size or data[header_size - 1]:
                 return None
-            start, end = decode_frequency(data[3:8]), decode_frequency(data[8:13])
+            start, end = decode_frequency(data[3:3 + size]), decode_frequency(data[3 + size:3 + 2 * size])
             if start is None or end is None:
                 return None
             if data[2] == 0:  # Center mode reports the center and half-span.
@@ -42,27 +50,32 @@ class Scope:
             if not 0 < start < end:
                 return None
             self.edges = (start, end)
+            self.total = total
             if total != 1:
-                if total == 0x11 and len(data) == 14:
+                if len(data) == header_size:
                     self.next_part = 2
                 return None
-            self.bins.extend(data[14:])
+            self.bins.extend(data[header_size:])
         else:
-            if total != 0x11 or part != self.next_part or not self.next_part:
+            if total != self.total or part != self.next_part or not self.next_part:
                 self.next_part = 0
                 return None
             self.bins.extend(data[2:])
-            self.next_part = 0 if part == 0x11 else (0x10 if part == 9 else part + 1)
+            self.next_part = 0 if part == total else part + 1
             if self.next_part:
                 return None
-        if len(self.bins) == SCOPE_BINS:
+        widths = {self.profile["scope_bins"]}
+        if self.profile["model"] == "IC-R8600":
+            widths.add(689)
+        if len(self.bins) in widths:
             return (*self.edges, bytes(self.bins))
         return None
 
 
 class Civ:
     def __init__(self, channel, address, on_frequency, on_scope, take_tune,
-                 take_commands=lambda: (), on_state=lambda *_: None):
+                 take_commands=lambda: (), on_state=lambda *_: None, profile=DEFAULT_PROFILE):
+        self.profile = profile
         self.channel = channel
         self.address = address
         self.on_frequency = on_frequency
@@ -72,7 +85,7 @@ class Civ:
         self.on_state = on_state
         self.nr = None
         self.toggle_nr = False
-        self.scope = Scope()
+        self.scope = Scope(profile)
         self.seq = 0
         self.next_poll = 0
         self.next_open = 0
@@ -107,20 +120,22 @@ class Civ:
         if now >= self.next_poll:
             self.send(b"\x03")
             self.send(b"\x04")
-            self.send(b"\x16\x40")
-            self.send(b"\x1c\x01")
+            if self.profile["nr"]:
+                self.send(b"\x16\x40")
+            if self.profile["tuner"]:
+                self.send(b"\x1c\x01")
             self.next_poll = now + 0.4
         for action, value in self.take_commands():
             if action == "mode" and value in (0, 1, 3, 5):
                 self.send(bytes((6, value, 1)))
-            elif action == "nr":
+            elif action == "nr" and self.profile["nr"]:
                 if self.nr is None:
                     self.toggle_nr = not self.toggle_nr
                     self.send(b"\x16\x40")
                 else:
                     self.nr = not self.nr
                     self.send(bytes((0x16, 0x40, self.nr)))
-            elif action == "tuner":
+            elif action == "tuner" and self.profile["tuner"] and self.profile["transmit"]:
                 self.send(b"\x1c\x01\x02")
         if now >= self.next_tune:
             target = self.take_tune()
@@ -128,7 +143,7 @@ class Civ:
                 self.send(b"\x05" + encode_frequency(target))
                 self.next_tune = now + 0.08
                 self.next_poll = now + 0.12
-        if now >= self.next_scope and now - self.last_scope > 2:
+        if self.profile["scope_bins"] and now >= self.next_scope and now - self.last_scope > 2:
             for setting in (0x10, 0x11):
                 self.send(bytes((0x27, setting)))
             self.next_scope = now + 2
@@ -144,7 +159,7 @@ class Civ:
             if frame[2] not in destinations or frame[3] != self.address:
                 continue
             self.open = True
-            if len(command) == 6 and command[0] in (0, 3, 5):
+            if len(command) in (6, 7) and command[0] in (0, 3, 5):
                 frequency = decode_frequency(command[1:])
                 if frequency is not None:
                     self.on_frequency(frequency)
@@ -163,7 +178,9 @@ class Civ:
                 result = self.scope.parse(command[3:])
                 if result:
                     self.last_scope = time.monotonic()
-                    self.on_scope(*result)
+                    start, end, bins = result
+                    maximum = self.profile["scope_max"]
+                    self.on_scope(start, end, bytes(min(160, v * 160 // maximum) for v in bins))
             elif len(command) == 3 and command[0] == 0x27 and command[1] in (0x10, 0x11):
                 setting, value = command[1:]
                 if value in (0, 1):

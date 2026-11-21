@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.0 — 2026-11-20
+
+- Added direct network profiles for IC-705, IC-7610, IC-7760, IC-7850/7851, IC-905, IC-9700, and IC-R8600 alongside IC-7300MK2.
+- Added native TS-890S KNS TCP control and 16 kHz LPCM RTP audio playback.
+- Added a scrollable radio selector, Kenwood audio-port and login-type settings, and capability-aware band presets and controls.
+- Added 475/689-bin and multipart Icom scopes, including IC-905 six-byte microwave frequencies.
+- Added protocol regression tests for all direct-network profiles and an emulated Kenwood session.
+
+
 ## 2026-11-19
 
 - App Store submission #480 was approved and merged. Updated installation instructions to prioritize the App Store and share code ICMZ.

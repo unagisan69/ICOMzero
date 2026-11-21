@@ -9,10 +9,11 @@ import struct
 import time
 
 from civ import Civ
+from models import PROFILES, find_icom
 
 HEADER = struct.Struct("<IHHII")
 RATE = 48000
-MODEL = "IC-7300MK2"
+MODEL = "Network radio"
 CLIENT = b"ICOMzero"
 # Icom's positional substitution table for printable ASCII credentials.
 PASSCODE = bytes.fromhex(
@@ -106,7 +107,15 @@ class Channel:
 
 def listen(host, port, username, password, stop, on_status, on_audio,
            on_frequency=lambda _: None, on_scope=lambda *_: None, take_tune=lambda: None,
-           take_commands=lambda: (), on_state=lambda *_: None):
+           take_commands=lambda: (), on_state=lambda *_: None, model="Auto (Icom)",
+           audio_port=60001, admin=False):
+    if model == "TS-890S":
+        from kenwood import listen as listen_kenwood
+        return listen_kenwood(host, port, username, password, stop, on_status, on_audio,
+                              on_frequency, on_scope, take_tune, take_commands, on_state,
+                              audio_port, admin)
+    if model != "Auto (Icom)" and model not in PROFILES:
+        raise RadioError("Choose a supported network radio")
     user = encode(username)
     secret = encode(password)
     with ExitStack() as stack:
@@ -211,16 +220,21 @@ def listen(host, port, username, password, stop, on_status, on_audio,
                     if size >= 168 and (size - 66) % 102 == 0:
                         for offset in range(66, size, 102):
                             name = data[offset + 16:offset + 48].split(b"\0", 1)[0]
-                            model = name.upper().replace(b"-", b"").replace(b" ", b"")
-                            if model == b"IC7300MK2":
+                            radio_address = data[offset + 82]
+                            profile = find_icom(name.decode("ascii", "replace"), radio_address, model)
+                            if profile:
                                 identity = data[offset:offset + 16]
                                 if identity[7:9] == b"\x10\x80":
                                     identity = b"\0" * 7 + identity[7:9] + b"\0" + identity[10:]
-                                identities[identity] = (name, data[offset + 82])
+                                identities[identity] = (name, radio_address, profile)
                         if not identities:
-                            raise RadioError("Expected an IC-7300MK2")
+                            raise RadioError("Radio model not recognized; choose it in Setup")
+                        if len(identities) != 1:
+                            raise RadioError("More than one radio found; choose a model in Setup")
                     if authenticated and identities and not stream_requested:
-                        identity, (name, civ_address) = next(iter(identities.items()))
+                        identity, (name, civ_address, profile) = next(iter(identities.items()))
+                        on_state("model", profile["model"])
+                        on_state("profile", profile)
                         body = request(144, 3)
                         body[16:32] = identity
                         body[48:48 + len(name)] = name
@@ -244,8 +258,8 @@ def listen(host, port, username, password, stop, on_status, on_audio,
                             if cat_port and audio_port:
                                 cat = connect(cat_sock, cat_port)
                                 audio = connect(audio_sock, audio_port)
-                                civ = Civ(cat, civ_address or 0xb6, on_frequency, on_scope, take_tune,
-                                          take_commands, on_state)
+                                civ = Civ(cat, civ_address or profile["civ"], on_frequency, on_scope, take_tune,
+                                          take_commands, on_state, profile)
         finally:
             if civ:
                 with suppress(OSError):

@@ -20,11 +20,11 @@ import time
 
 from PIL import Image, ImageDraw, ImageFont
 
-from civ import MIN_HZ, MAX_HZ
-from radio import MODEL, RATE, RadioError, encode, listen
+from models import MIN_HZ, MAX_HZ, DEFAULT_PROFILE, PROFILES, RADIO_CHOICES, presets
+from radio import RATE, RadioError, encode, listen
 
-FIELDS = ("Host", "Control port", "Username", "Password")
-DEFAULTS = ("", "50001", "", "")
+FIELDS = ("Host", "Control port", "Username", "Password", "Radio", "Audio port", "Login")
+DEFAULTS = ("", "50001", "", "", "Auto (Icom)", "60001", "User")
 CONFIG = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "icomzero/radio.json"
 SPEAKER = "pulse"
 SPEAKER_SINK = "alsa_output.platform-sound.stereo-fallback"
@@ -32,12 +32,6 @@ EVENT = struct.Struct("@llHHi")
 WIDTH, HEIGHT = 320, 170
 BG, CARD, WHITE, MUTED, GREEN = "#101a21", "#1d2d36", "#f0f6f6", "#9bb2bb", "#70edbb"
 TUNE_STEP = 1000
-BANDS = (
-    ("160m", 1_900_000), ("80m", 3_750_000), ("60m", 5_357_000),
-    ("40m", 7_150_000), ("30m", 10_125_000), ("20m", 14_200_000),
-    ("17m", 18_130_000), ("15m", 21_250_000), ("12m", 24_950_000),
-    ("10m", 28_400_000), ("6m", 50_125_000),
-)
 WATERFALL_W, WATERFALL_H = 296, 70
 KEY_CARDPUTER_FN = 389
 KEY_FN, KEY_FN_D, KEY_FN_S = 0x1D0, 0x1E0, 0x1E3
@@ -83,13 +77,24 @@ def load():
 
 
 def connection(values):
-    host, port, user, password = values
+    host, port, user, password = values[:4]
     if not host.strip():
         raise RadioError("Enter the radio address in Setup")
     if not port.isascii() or not port.isdecimal() or not 1 <= int(port) <= 65535:
         raise RadioError("Control port must be 1–65535")
-    encode(user)
-    encode(password)
+    model = values[4] if len(values) > 4 else "Auto (Icom)"
+    if model not in RADIO_CHOICES:
+        raise RadioError("Choose a supported network radio")
+    if model == "TS-890S":
+        for value in (user, password):
+            if not 1 <= len(value) <= 99 or any(not 32 <= ord(c) <= 126 or c == ";" for c in value):
+                raise RadioError("KNS login requires 1–99 ASCII characters without semicolons")
+        audio_port = values[5]
+        if not audio_port.isascii() or not audio_port.isdecimal() or not 1 <= int(audio_port) <= 65535:
+            raise RadioError("Audio port must be 1–65535")
+    else:
+        encode(user)
+        encode(password)
     return host.strip(), int(port), user, password
 
 
@@ -183,7 +188,11 @@ class Receiver:
 
             listen(*settings, self.stop, self.update, play,
                    self.frequency_changed, self.scope_changed, self.take_tune,
-                   self.take_commands, self.radio_state_changed)
+                   self.take_commands, self.radio_state_changed,
+                   model=read_config().get("Radio", "Auto (Icom)"),
+                   audio_port=(int(read_config().get("Audio port", "60001"))
+                               if read_config().get("Radio") == "TS-890S" else 60001),
+                   admin=read_config().get("Login") == "Admin")
             self.update("Disconnected")
         except (RadioError, OSError) as error:
             self.update(str(error) if isinstance(error, RadioError) else f"Connection error: {error.strerror}")
@@ -209,6 +218,11 @@ class Receiver:
         self.radio_state = {**self.radio_state, name: value}
 
     def command(self, action, value=None):
+        profile = self.radio_state.get("profile", DEFAULT_PROFILE)
+        if action == "nr" and not profile["nr"]:
+            return
+        if action == "tuner" and not (profile["tuner"] and profile["transmit"]):
+            return
         if self.busy() and not self.stop.is_set():
             with self.tune_lock:
                 self.commands.append((action, value))
@@ -230,6 +244,9 @@ class Receiver:
             if hz is None:
                 base = self.target if time.monotonic() < self.target_deadline else None
                 hz = (base or self.frequency) + steps * TUNE_STEP
+            ranges = self.radio_state.get("profile", DEFAULT_PROFILE)["bands"]
+            if not any(start <= hz <= end for _, start, end in ranges):
+                return
             self.tune_queue = self.target = max(MIN_HZ, min(MAX_HZ, hz))
             self.target_deadline = time.monotonic() + 0.75
 
@@ -315,11 +332,15 @@ class Display:
             draw.text((x, y), text, font=font, fill=color)
 
         self.update_waterfall(scope)
+        profile = (radio_state or {}).get("profile", DEFAULT_PROFILE)
+        bands = presets(profile)
         if selected is not None:
             label(12, 7, "Setup", "title")
-            label(206, 14, MODEL, "small", MUTED)
-            for index, name in enumerate(FIELDS):
-                y = 37 + 24 * index
+            label(185, 14, (radio_state or {}).get("model", "Network radio"), "small", MUTED)
+            first = max(0, min(selected - 2, len(FIELDS) - 4))
+            for index in range(first, min(first + 4, len(FIELDS))):
+                name = FIELDS[index]
+                y = 37 + 24 * (index - first)
                 active = selected == index
                 value = "•" * len(values[index]) if name == "Password" else values[index]
                 value = value[-19:]
@@ -331,15 +352,20 @@ class Display:
                   "↑↓ / Tab field   ·   Enter edit   ·   Esc done", "small", MUTED)
         elif band is not None:
             label(12, 7, "Select band", "title")
-            for index, (name, hz) in enumerate(BANDS):
-                x, y = 12 + index % 3 * 100, 37 + index // 3 * 27
+            page = band // 12 * 12
+            for index in range(page, min(page + 12, len(bands))):
+                name, hz = bands[index]
+                slot = index - page
+                x, y = 12 + slot % 3 * 100, 37 + slot // 3 * 27
                 color = GREEN if index == band else WHITE
                 draw.rounded_rectangle((x, y, x + 94, y + 23), 4, fill=CARD,
                                        outline=GREEN if index == band else CARD)
-                label(x + 7, y + 4, f"{name}   {hz / 1e6:g}", "small", color)
+                frequency_label = f"{hz / 1e9:.3g}G" if hz >= 1_000_000_000 else f"{hz / 1e6:g}"
+                label(x + 7, y + 4, f"{name} {frequency_label}", "small", color)
             label(12, 151, "Z / C select   ·   Enter tune   ·   Esc back", "small", MUTED)
         else:
-            label(12, 4, f"{frequency / 1e6:.6f}" if frequency else "ICOMzero", "title")
+            label(12, 4, f"{frequency / 1e6:.6f}" if frequency else "ICOMzero",
+                  "body" if frequency and frequency >= 100_000_000 else "title")
             if frequency:
                 mode = {0: "LSB", 1: "USB", 2: "AM", 3: "CW", 4: "RTTY", 5: "FM",
                         7: "CW-R", 8: "RTTY-R"}.get((radio_state or {}).get("mode"), "MHz")
@@ -380,8 +406,8 @@ class Display:
             shortcuts = (
                 ("Z / C", "Tune down / up (hold)"),
                 ("B", "Band selection"),
-                ("N", "Noise reduction on / off"),
-                ("T", "Antenna tune (transmits)"),
+                ("N", "Noise reduction on / off" if profile["nr"] else "Noise reduction unavailable"),
+                ("T", "Antenna tune (transmits)" if profile["tuner"] and profile["transmit"] else "No antenna tuner"),
                 ("Fn + S / D", "Volume down / up"),
                 ("Fn + A", "Mute / unmute"),
                 ("Enter", "Play / stop"),
@@ -435,6 +461,7 @@ def ui(lcd, keyboard):
             if held_tune is not None and now >= next_repeat:
                 rx.tune(steps=-1 if held_tune in (44, 105) else 1)
                 next_repeat = now + 0.09
+            bands = presets(rx.radio_state.get("profile", DEFAULT_PROFILE))
             busy = rx.busy()
             if not busy:
                 band = None
@@ -497,8 +524,9 @@ def ui(lcd, keyboard):
                         char = KEYS[key]
                         if shift:
                             char = SHIFTED.get(char, char.upper())
-                        limit = (253, 5, 16, 16)[selected]
-                        if len(values[selected]) < limit and (selected != 1 or char.isdecimal()):
+                        credential_limit = 99 if values[4] == "TS-890S" else 16
+                        limit = (253, 5, credential_limit, credential_limit, 32, 5, 5)[selected]
+                        if len(values[selected]) < limit and (selected not in (1, 5) or char.isdecimal()):
                             values[selected] += char
                 elif selected is not None:
                     if key == 1:
@@ -506,15 +534,27 @@ def ui(lcd, keyboard):
                     elif key in (15, 103, 108):
                         selected = (selected + (-1 if key == 103 else 1)) % len(FIELDS)
                     elif key == 28 and pressed == 1:
-                        original, editing = values[selected], True
+                        if selected in (4, 6):
+                            choices = RADIO_CHOICES if selected == 4 else ("User", "Admin")
+                            before = values[selected]
+                            index = choices.index(before) if before in choices else -1
+                            values[selected] = choices[(index + 1) % len(choices)]
+                            if selected == 4:
+                                if values[selected] == "TS-890S" and values[1] == "50001":
+                                    values[1] = "60000"
+                                elif values[selected] != "TS-890S" and values[1] == "60000":
+                                    values[1] = "50001"
+                            save(values)
+                        else:
+                            original, editing = values[selected], True
                 elif band is not None:
                     if key in (1, 48):
                         band = None
                     elif key in (44, 46, 105, 106, 103, 108, 15):
                         step = {44: -1, 105: -1, 103: -3, 108: 3}.get(key, 1)
-                        band = (band + step) % len(BANDS)
+                        band = (band + step) % len(bands)
                     elif key == 28 and pressed == 1:
-                        rx.change_band(BANDS[band][1])
+                        rx.change_band(bands[band][1])
                         band = None
                 elif key == 15:
                     help_open = True
@@ -532,7 +572,7 @@ def ui(lcd, keyboard):
                 elif key == 20 and pressed == 1:
                     rx.command("tuner")
                 elif key == 48 and rx.frequency and rx.busy() and pressed == 1:
-                    band = min(range(len(BANDS)), key=lambda i: abs(BANDS[i][1] - rx.frequency))
+                    band = min(range(len(bands)), key=lambda i: abs(bands[i][1] - rx.frequency))
                 elif key == 28 and pressed == 1:
                     if rx.busy():
                         rx.stop.set()
@@ -555,12 +595,22 @@ def main():
     modes.add_argument("--configure", nargs=2, metavar=("HOST", "USERNAME"))
     modes.add_argument("--test-audio", type=float, metavar="SECONDS")
     modes.add_argument("--check-display", action="store_true", help=argparse.SUPPRESS)
-    parser.add_argument("--port", default="50001")
+    parser.add_argument("--port", default=None)
+    parser.add_argument("--model", choices=RADIO_CHOICES, default=None)
+    parser.add_argument("--audio-port", default=None)
+    parser.add_argument("--admin", action="store_true")
     args = parser.parse_args()
     if args.configure:
         host, username = args.configure
         password = getpass.getpass("Radio password: ") if sys.stdin.isatty() else sys.stdin.readline().rstrip("\n")
-        values = (host, args.port, username, password)
+        values = load()
+        values[:4] = (host, args.port or ("60000" if args.model == "TS-890S" else "50001"), username, password)
+        if args.model is not None:
+            values[4] = args.model
+        if args.audio_port is not None:
+            values[5] = args.audio_port
+        if args.admin:
+            values[6] = "Admin"
         connection(values)
         save(values)
     elif args.test_audio is not None:
