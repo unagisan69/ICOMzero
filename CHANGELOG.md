@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.10.0 — 2026-11-21
+
+- Queue fresh callers who address the station during another exchange; refresh/deduplicate entries, expire stale callers, and prioritize queued contacts after completion or abandonment.
+- Replace four own CQs with two CQs, then up to two distinct strong recent CQ targets with two initial calls each. Keep opposite-slot timing, Auto audio frequency, per-stage exchange retries and existing RF/clock safety stops.
+- Avoid completed stations, unsupported compound/hashed targets and stale/busy CQ candidates; prepare target transitions before encoding, and journal queue/ranking/expiry decisions.
+- Center and wrap notifications and RF warning cards; highlight tagged POTA/SOTA CQ rows in green.
+- Bundle licensed offline BIG CTY country/territory lookup with exact exceptions, portable prefixes, compact decode labels, selected-decode entity display and optional local CTY.DAT import.
+
 ## 0.9.0 — 2026-11-21
 
 - Add explicitly started Auto CQ: four unanswered CQs, four unanswered attempts per contact stage, then resume CQ after a completed contact or an abandoned attempt. Wait for the final receive opportunity before stopping.

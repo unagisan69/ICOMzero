@@ -92,7 +92,7 @@ def request(url, data, form=False):
                 "application/x-www-form-urlencoded" if form else "application/json"
             ),
             "Accept": "application/json",
-            "User-Agent": "ICOMzero/0.9.0",
+            "User-Agent": "ICOMzero/0.10.0",
         },
     )
     with urllib.request.urlopen(req, timeout=10) as response:

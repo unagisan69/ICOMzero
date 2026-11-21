@@ -142,6 +142,10 @@ class Station:
     def auto_active(self):
         return self.auto.active
 
+    @property
+    def queued_count(self):
+        return len(self.auto.queue)
+
     def audit(self, event, **fields):
         if self.journal is None:
             raise OSError("Auto CQ journal unavailable")
@@ -435,6 +439,11 @@ class Station:
                         self.sequence.status = job.error or "Transmit stopped"
                         record_fault(self.receiver, self.sequence.status, job)
                     job = pending = None
+                if self.auto.active and job is None:
+                    try:
+                        self.auto.prepare(decoded_slot=self.decoder.last_decoded_slot)
+                    except OSError:
+                        self.receiver.stop_tx()
                 # Encode during RX, not after entering the small key-up window.
                 if self.sequence.enabled:
                     key = (

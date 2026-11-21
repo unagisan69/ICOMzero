@@ -20,6 +20,7 @@ import time
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
+from countries import message_country, activation_cq, short_country
 from models import MIN_HZ, MAX_HZ, DEFAULT_PROFILE, PROFILES, RADIO_CHOICES, presets
 from radio import RATE, RadioError, ConnectionLost, encode, listen
 
@@ -464,8 +465,8 @@ class Display:
             label(12, 155, "Ent - ■" if busy else "Ent - ▶", "small", MUTED)
             label(240, 155, "Tab - Help", "small", MUTED)
         if volume_visible:
-            draw.rounded_rectangle((207, 39, 304, 65), radius=6, fill=BG, outline=GREEN)
-            label(215, 44, f"Volume {volume}%", "small", GREEN)
+            image = notice_popup(self, image, "Volume", f"{volume}%")
+            draw = ImageDraw.Draw(image)
         if help_open:
             draw.rounded_rectangle((6, 4, 314, 165), radius=7, fill=BG, outline=GREEN)
             label(18, 10, "Keyboard shortcuts", color=GREEN)
@@ -750,7 +751,7 @@ def ft8_frame(
         background = (
             "#173e5a"
             if message.local_tx
-            else ("#674719" if own else (CARD if alternate else BG))
+            else ("#674719" if own else ("#174d36" if activation_cq(message) else (CARD if alternate else BG)))
         )
         draw.rectangle((0, y, 319, y + 12), fill=background)
         text = ("TX " if message.local_tx else f"{message.snr:+03d} ") + message.text
@@ -764,6 +765,15 @@ def ft8_frame(
                 else ("#ffe1a1" if own else (GREEN if alternate else WHITE))
             ),
         )
+        region = short_country(message_country(message))
+        available = min(89, 309 - draw.textlength(text, font=display.fonts["small"]) - 17)
+        if available >= 30:
+            label = region
+            while label and draw.textlength(label, font=display.fonts["small"]) > available:
+                label = label[:-1]
+            if label != region and len(label) > 1:
+                label = label[:-1] + "…"
+            draw.text((311, y - 1), label, anchor="ra", font=display.fonts["small"], fill="#b1c8bb")
         if message.key == history.selected:
             draw.rectangle((0, y, 319, y + 12), outline=GREEN)
             draw.text((0, y - 1), "›", font=display.fonts["small"], fill=GREEN)
@@ -841,11 +851,40 @@ def ft8_frame(
         fill=WHITE if transmitting else MUTED,
     )
     if fault:
-        draw.rectangle((0, 0, 319, 26), fill="#8a2424")
-        draw.text((5, 0), str(fault)[:45], font=display.fonts["small"], fill=WHITE)
-        draw.text(
-            (5, 13), "Tab Menu → Clear warning", font=display.fonts["small"], fill=WHITE
-        )
+        image = notice_popup(display, image, "TX stopped", str(fault), warning=True,
+                             hint="Tab Menu → Clear warning")
+    return image
+
+
+def notice_popup(display, image, title, message, warning=False, hint=None):
+    """Centered, wrapped cards keep long warnings readable on the small LCD."""
+    shade = Image.new("RGBA", image.size, (0, 0, 0, 95))
+    image = Image.alpha_composite(image.convert("RGBA"), shade).convert("RGB")
+    draw = ImageDraw.Draw(image)
+    font = display.fonts["small"]
+    lines, line = [], ""
+    for word in str(message).split():
+        candidate = (line + " " + word).strip()
+        if line and draw.textlength(candidate, font=font) > 258:
+            lines.append(line)
+            line = word
+        else:
+            line = candidate
+    if line:
+        lines.append(line)
+    lines = lines[:4]
+    height = 43 + 15 * len(lines) + (19 if hint else 0)
+    top = max(10, (HEIGHT-height)//2)
+    edge = "#ff9292" if warning else GREEN
+    fill = "#3d2028" if warning else "#17372f"
+    draw.rounded_rectangle((17,top+4,307,top+height+4),12,fill="#071016")
+    draw.rounded_rectangle((14,top,304,top+height),12,fill=fill,outline=edge,width=2)
+    draw.rounded_rectangle((26,top+13,30,top+29),2,fill=edge)
+    draw.text((40,top+10),title,font=display.fonts["body"],fill=edge)
+    for i,text in enumerate(lines):
+        draw.text((28,top+34+i*15),text,font=font,fill=WHITE)
+    if hint:
+        draw.text((28,top+height-20),hint,font=font,fill=edge)
     return image
 
 
@@ -1123,7 +1162,7 @@ def ft8_ui(lcd, keyboard):
                     )
                     if panel == "menu" and history.current() is not None:
                         title = "Selected decode"
-                        subtitle = history.current().text
+                        subtitle = message_country(history.current()) + " · " + history.current().text
                     if panel == "manual":
                         subtitle = "Review exchanged reports, then save"
                     image, draw = menu_frame(display, title, subtitle[:43])
@@ -1132,7 +1171,7 @@ def ft8_ui(lcd, keyboard):
                         if panel == "menu" and history.current() is not None:
                             items[1] = "Reply / continue"
                         if panel == "menu" and getattr(station, "auto_active", False):
-                            items[2] = "Stop Auto CQ"
+                            items[2] = "Stop Auto CQ" + (f" ({station.queued_count} queued)" if getattr(station, "queued_count", 0) else "")
                     elif panel == "help":
                         items = [
                             "F / Fn+F: previous decode",
@@ -1188,7 +1227,7 @@ def ft8_ui(lcd, keyboard):
                             fill=GREEN if index == choice else WHITE,
                         )
                     bottom = (
-                        (toast if now < toast_until else station.status)
+                        station.status
                         if panel == "menu"
                         else (
                             " · ".join(logbook.summary())
@@ -1198,7 +1237,7 @@ def ft8_ui(lcd, keyboard):
                     )
                     draw.text(
                         (12, 152),
-                        (toast if now < toast_until else bottom)[:43],
+                        bottom[:43],
                         font=display.fonts["small"],
                         fill=MUTED,
                     )
@@ -1221,12 +1260,9 @@ def ft8_ui(lcd, keyboard):
                         power_set=int(settings["tx_power_w"]),
                         fault=rx.radio_state.get("tx_fault"),
                     )
-                    if now < toast_until and not rx.radio_state.get("tx_fault"):
-                        draw = ImageDraw.Draw(image)
-                        draw.rectangle((0, 0, 319, 17), fill=CARD)
-                        draw.text(
-                            (8, 1), toast[:43], font=display.fonts["small"], fill=GREEN
-                        )
+                if now < toast_until and not rx.radio_state.get("tx_fault"):
+                    warning = any(word in toast.lower() for word in ("failed", "error", "lost", "not confirmed", "timed out", "unavailable", "blocked"))
+                    image = notice_popup(display, image, "Attention" if warning else "ICOMzero", toast, warning=warning)
                 if saved_qso and now < qso_until and not rx.radio_state.get("tx_fault"):
                     image = qso_popup(display, image, saved_qso)
                 display.present(image)
@@ -1362,7 +1398,7 @@ def ft8_ui(lcd, keyboard):
                                 else:
                                     station.action("auto_cq", dial=dial)
                                     history.follow_bottom()
-                                    notify("Auto CQ: up to 4 unanswered calls")
+                                    notify("Auto CQ: 2 CQs, then 2 CQ targets")
                                 panel = None
                             elif action == "Settings":
                                 stop_tx()

@@ -2,7 +2,10 @@
 set -eu
 chmod 755 "$STAGE"
 install -D -m 755 app/icomzero "$STAGE$APP_INSTALL_DIR/icomzero"
-install -m 644 app/radio.py app/civ.py app/models.py app/radios.json app/kenwood.py app/ft8.py app/ft8log.py app/ft8qso.py app/ft8station.py app/ft8tx.py app/meters.py app/ft8auto.py app/notifications.py "$STAGE$APP_INSTALL_DIR/"
+install -m 644 app/radio.py app/civ.py app/models.py app/radios.json app/kenwood.py app/ft8.py app/ft8log.py app/ft8qso.py app/ft8station.py app/ft8tx.py app/meters.py app/ft8auto.py app/notifications.py app/countries.py "$STAGE$APP_INSTALL_DIR/"
+install -m 644 vendor/country-files/cty.dat "$STAGE$APP_INSTALL_DIR/cty.dat"
+install -D -m 644 vendor/country-files/LICENSE "$STAGE/usr/share/doc/icomzero/country-files-LICENSE"
+install -m 644 vendor/country-files/README.md "$STAGE/usr/share/doc/icomzero/country-files-README.md"
 install -m 755 build/icomzero-ft8-decode build/icomzero-ft8-encode "$STAGE$APP_INSTALL_DIR/"
 install -D -m 644 vendor/ft8_lib/LICENSE "$STAGE/usr/share/doc/icomzero/ft8_lib-LICENSE"
 install -D -m 644 vendor/ft8_lib/fft/COPYING "$STAGE/usr/share/doc/icomzero/kissfft-COPYING"
