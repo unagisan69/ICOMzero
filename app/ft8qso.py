@@ -186,6 +186,7 @@ class Sequencer:
         self.dial = 7074000
         self.serial = 0
         self.final_seen = False
+        self.allow_unprompted_report = False
         self.last_sent_slot = None
         self.last_sent_stage = None
         self.qso_start = None
@@ -210,6 +211,7 @@ class Sequencer:
         self.seen = set()
         self.start = time.time()
         self.final_seen = False
+        self.allow_unprompted_report = False
         self.last_sent_slot = None
         self.last_sent_stage = None
         self.qso_start = None
@@ -342,7 +344,10 @@ class Sequencer:
         if self.last_rx is not None and m.slot <= self.last_rx:
             return
         self.last_rx = m.slot
-        if re.fullmatch("[+-][0-9]{2}", extra) and self.stage in ("grid", "report"):
+        if re.fullmatch("[+-][0-9]{2}", extra) and (
+            self.stage in ("grid", "report")
+            or (self.stage == "rreport" and self.allow_unprompted_report)
+        ):
             self.received = int(extra)
             self.set_message("rreport", f"R{self.sent:+03d}")
         elif re.fullmatch("R[+-][0-9]{2}", extra) and self.stage in (
@@ -353,6 +358,9 @@ class Sequencer:
             self.received = int(extra[1:])
             self.set_message("rrr", "RRR")
         elif extra in ("RRR", "RR73") and self.stage in ("rreport", "rrr"):
+            if self.allow_unprompted_report and self.received is None:
+                self.status = "Waiting for actual signal report"
+                return
             self.final_seen = True
             self.set_message("73", "73")
         elif (

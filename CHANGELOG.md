@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.11.0 — 2026-11-21
+
+- Change Auto CQ to one own CQ, then up to five distinct strong recent CQ targets with two calls each before no-response stop.
+- Add POTA Hunt: monitor tagged POTA/SOTA CQs, send a direct R-report at the opposite UTC period/audio offset, allow three unanswered attempts per stage, then rest and continue monitoring. Require actual exchanged reports for logging.
+- Clear latched RF warnings with Enter after confirmed receive state; remove the Tab menu clearance step and prevent the same key from starting a reply.
+- Move receive filtering/capture off the network pacing thread, bound packet-drain work, and reset capture alignment on queue overruns. Cache unchanged decode rows while refreshing live TX/meters.
+- Add private transport-loop gap diagnostics. Retain all existing SWR/ALC/telemetry, clock, PTT and pacing safety limits.
+
 ## 0.10.0 — 2026-11-21
 
 - Queue fresh callers who address the station during another exchange; refresh/deduplicate entries, expire stale callers, and prioritize queued contacts after completion or abandonment.

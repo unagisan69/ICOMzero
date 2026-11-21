@@ -739,57 +739,67 @@ def ft8_frame(
     power_set=10,
     fault=None,
     auto_active=False,
+    auto_label="AUTO",
 ):
     image = Image.new("RGB", (WIDTH, HEIGHT), BG)
     draw = ImageDraw.Draw(image)
     meters = meters or {}
     rows = history.visible(11)
-    for row, message in enumerate(rows):
-        y = row * 13 + 1
-        own = message.involves(callsign)
-        alternate = (history.start + row) % 2
-        background = (
-            "#173e5a"
-            if message.local_tx
-            else ("#674719" if own else ("#174d36" if activation_cq(message) else (CARD if alternate else BG)))
-        )
-        draw.rectangle((0, y, 319, y + 12), fill=background)
-        text = ("TX " if message.local_tx else f"{message.snr:+03d} ") + message.text
-        draw.text(
-            (9, y - 1),
-            text,
-            font=display.fonts["small"],
-            fill=(
-                "#8bd6ff"
+    body_key = (callsign, history.start, history.selected,
+                tuple((m.key, m.snr) for m in rows),
+                (ready, status) if not rows else None)
+    cached = getattr(display, "_ft8_decode_body", None)
+    if isinstance(cached, tuple) and cached[0] == body_key:
+        image = cached[1].copy()
+        draw = ImageDraw.Draw(image)
+    else:
+        for row, message in enumerate(rows):
+            y = row * 13 + 1
+            own = message.involves(callsign)
+            alternate = (history.start + row) % 2
+            background = (
+                "#173e5a"
                 if message.local_tx
-                else ("#ffe1a1" if own else (GREEN if alternate else WHITE))
-            ),
-        )
-        region = short_country(message_country(message))
-        available = min(89, 309 - draw.textlength(text, font=display.fonts["small"]) - 17)
-        if available >= 30:
-            label = region
-            while label and draw.textlength(label, font=display.fonts["small"]) > available:
-                label = label[:-1]
-            if label != region and len(label) > 1:
-                label = label[:-1] + "…"
-            draw.text((311, y - 1), label, anchor="ra", font=display.fonts["small"], fill="#b1c8bb")
-        if message.key == history.selected:
-            draw.rectangle((0, y, 319, y + 12), outline=GREEN)
-            draw.text((0, y - 1), "›", font=display.fonts["small"], fill=GREEN)
-    if not rows:
-        draw.text(
-            (12, 51),
-            "Waiting for CQ calls" if ready else status[:40],
-            font=display.fonts["body"],
-            fill=GREEN,
-        )
-        draw.text(
-            (12, 78),
-            "CQ calls and your contacts appear here",
-            font=display.fonts["small"],
-            fill=MUTED,
-        )
+                else ("#674719" if own else ("#174d36" if activation_cq(message) else (CARD if alternate else BG)))
+            )
+            draw.rectangle((0, y, 319, y + 12), fill=background)
+            text = ("TX " if message.local_tx else f"{message.snr:+03d} ") + message.text
+            draw.text(
+                (9, y - 1),
+                text,
+                font=display.fonts["small"],
+                fill=(
+                    "#8bd6ff"
+                    if message.local_tx
+                    else ("#ffe1a1" if own else (GREEN if alternate else WHITE))
+                ),
+            )
+            region = short_country(message_country(message))
+            available = min(89, 309 - draw.textlength(text, font=display.fonts["small"]) - 17)
+            if available >= 30:
+                label = region
+                while label and draw.textlength(label, font=display.fonts["small"]) > available:
+                    label = label[:-1]
+                if label != region and len(label) > 1:
+                    label = label[:-1] + "…"
+                draw.text((311, y - 1), label, anchor="ra", font=display.fonts["small"], fill="#b1c8bb")
+            if message.key == history.selected:
+                draw.rectangle((0, y, 319, y + 12), outline=GREEN)
+                draw.text((0, y - 1), "›", font=display.fonts["small"], fill=GREEN)
+        if not rows:
+            draw.text(
+                (12, 51),
+                "Waiting for CQ calls" if ready else status[:40],
+                font=display.fonts["body"],
+                fill=GREEN,
+            )
+            draw.text(
+                (12, 78),
+                "CQ calls and your contacts appear here",
+                font=display.fonts["small"],
+                fill=MUTED,
+            )
+        display._ft8_decode_body = (body_key, image.copy())
     draw.rectangle((12, 146, 307, 148), fill=CARD)
     draw.rectangle(
         (12, 146, 12 + int(progress * 295), 148),
@@ -813,7 +823,7 @@ def ft8_frame(
         fill=WHITE if transmitting else MUTED,
     )
     if auto_active:
-        draw.text((187, 152), "AUTO", font=display.fonts["small"], fill="#f06464")
+        draw.text((187, 152), auto_label, font=display.fonts["small"], fill="#f06464")
     now = time.monotonic()
 
     def fresh(name):
@@ -852,7 +862,7 @@ def ft8_frame(
     )
     if fault:
         image = notice_popup(display, image, "TX stopped", str(fault), warning=True,
-                             hint="Tab Menu → Clear warning")
+                             hint="Enter - Clear warning")
     return image
 
 
@@ -958,12 +968,12 @@ def ft8_ui(lcd, keyboard):
         "Bands",
         "Call CQ",
         "Auto CQ",
+        "POTA Hunt",
         "Settings",
         "Stop Transmit",
         "Logging",
         "Record QSO",
         "Tune antenna",
-        "Clear warning",
         "Help",
         "Back",
     ]
@@ -1170,8 +1180,10 @@ def ft8_ui(lcd, keyboard):
                         items = list(menu_items) if panel == "menu" else log_items
                         if panel == "menu" and history.current() is not None:
                             items[1] = "Reply / continue"
-                        if panel == "menu" and getattr(station, "auto_active", False):
+                        if panel == "menu" and getattr(station, "auto_active", False) and getattr(station, "automation_label", "AUTO") == "AUTO":
                             items[2] = "Stop Auto CQ" + (f" ({station.queued_count} queued)" if getattr(station, "queued_count", 0) else "")
+                        if panel == "menu" and getattr(station, "auto_active", False) and getattr(station, "automation_label", "AUTO") == "POTA":
+                            items[3] = "Stop POTA Hunt"
                     elif panel == "help":
                         items = [
                             "F / Fn+F: previous decode",
@@ -1256,6 +1268,7 @@ def ft8_ui(lcd, keyboard):
                         transmitting,
                         armed=station.active,
                         auto_active=getattr(station, "auto_active", False),
+                        auto_label=getattr(station, "automation_label", "AUTO"),
                         meters=rx.radio_state,
                         power_set=int(settings["tx_power_w"]),
                         fault=rx.radio_state.get("tx_fault"),
@@ -1277,6 +1290,13 @@ def ft8_ui(lcd, keyboard):
                 if not pressed:
                     if key in (33, 45, 103, 108, 482):
                         held = None
+                    continue
+                if key == 28 and pressed == 1 and rx.radio_state.get("tx_fault"):
+                    station.action("clear_fault")
+                    notify("Checking radio RX to clear warning")
+                    continue
+                if key == 28 and pressed == 1 and now < toast_until and any(word in toast.lower() for word in ("failed", "error", "lost", "not confirmed", "timed out", "unavailable", "blocked")):
+                    toast_until = 0
                     continue
                 if editing:
                     label, field = fields[panel][choice]
@@ -1392,13 +1412,22 @@ def ft8_ui(lcd, keyboard):
                                     notify("Calling CQ on next transmit period")
                                 panel = None
                             elif action == "Auto CQ":
-                                if getattr(station, "auto_active", False):
+                                if getattr(station, "auto_active", False) and getattr(station, "automation_label", "AUTO") == "AUTO":
                                     stop_tx()
                                     notify("Auto CQ stopped")
                                 else:
                                     station.action("auto_cq", dial=dial)
                                     history.follow_bottom()
-                                    notify("Auto CQ: 2 CQs, then 2 CQ targets")
+                                    notify("Auto CQ: 1 CQ, then up to 5 targets")
+                                panel = None
+                            elif action == "POTA Hunt":
+                                if getattr(station, "auto_active", False) and getattr(station, "automation_label", "AUTO") == "POTA":
+                                    stop_tx()
+                                    notify("POTA Hunt stopped")
+                                else:
+                                    station.action("pota_hunt", dial=dial)
+                                    history.follow_bottom()
+                                    notify("POTA Hunt monitoring POTA / SOTA CQs")
                                 panel = None
                             elif action == "Settings":
                                 stop_tx()
@@ -1440,9 +1469,6 @@ def ft8_ui(lcd, keyboard):
                                         notify(error)
                             elif action == "Tune antenna":
                                 station.action("tune", dial=dial)
-                                panel = None
-                            elif action == "Clear warning":
-                                station.action("clear_fault")
                                 panel = None
                             elif action == "Help":
                                 show_panel("help")

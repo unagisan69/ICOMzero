@@ -193,8 +193,9 @@ class Channel:
                 self.received.popitem(last=False)
         return kind, data
 
-    def drain(self):
-        # A bounded batch prevents audio/scope bursts from starving keepalives.
+    def drain(self, budget=None):
+        # Bound both count and CPU time so bursts cannot starve TX or meters.
+        started = time.monotonic()
         for _ in range(64):
             try:
                 packet = self.receive()
@@ -202,6 +203,8 @@ class Channel:
                 return
             if packet is not None:
                 yield packet
+            if budget is not None and time.monotonic() - started >= budget:
+                break
 
 
 def listen(
@@ -301,9 +304,15 @@ def listen(
             body[20:22] = b"\x07\x98"
             control.send(0, body=body, tracked=True)
 
+        loop_at = time.monotonic()
         try:
             while not stop.is_set():
                 now = time.monotonic()
+                gap = now - loop_at
+                loop_at = now
+                if gap > 0.08:
+                    on_state("transport_gap_ms", round(gap * 1000, 1))
+                    on_state("transport_gap_at", now)
                 if now > deadline:
                     raise ConnectionLost(
                         "Audio stream timed out"
@@ -393,7 +402,7 @@ def listen(
                     deadline = now + 8
                 for key, _ in selector.select(0.01):
                     channel = key.data
-                    for kind, data in channel.drain():
+                    for kind, data in channel.drain(budget=0.003):
                         size = len(data)
                         if channel is audio:
                             if kind == 0 and size > 24 and (size - 24) % 2 == 0:

@@ -27,6 +27,8 @@ class AutoTests(unittest.TestCase):
             self.seq, lambda event, **data: self.events.append((event, data))
         )
         self.auto.start(7074000)
+        self.auto.own_cq_limit = 2
+        self.auto.target_limit = 2
 
     def send(self, slot):
         self.now.return_value = slot * 15 + 0.05
@@ -182,7 +184,7 @@ class NotificationPlayback(unittest.TestCase):
 
 
 class StationIntegration(unittest.TestCase):
-    def test_controller_journals_two_cqs_then_plays_stop_sound(self):
+    def test_controller_journals_one_cq_then_plays_stop_sound(self):
         import threading
         import time
         from unittest.mock import Mock
@@ -242,7 +244,7 @@ class StationIntegration(unittest.TestCase):
             station = Station(receiver, decoder, book)
             try:
                 station.action("auto_cq")
-                for i, slot in enumerate((100, 102)):
+                for i, slot in enumerate((100,)):
                     decoder.last_decoded_slot = slot - 1
                     advance(slot * 15 + 0.05)
                     wait(lambda: len(jobs) > i)
@@ -252,18 +254,18 @@ class StationIntegration(unittest.TestCase):
                     jobs[i].done.set()
                     wait(lambda: station.auto.cq_count == i + 1)
                 self.assertTrue(station.auto_active)
-                decoder.last_decoded_slot = 103
-                advance(104 * 15 + 0.05)
+                decoder.last_decoded_slot = 101
+                advance(102 * 15 + 0.05)
                 wait(lambda: station.journal is None)
                 self.assertFalse(station.auto_active)
-                self.assertEqual(len(jobs), 2)
+                self.assertEqual(len(jobs), 1)
                 sounds.return_value.play.assert_called_once_with("auto_stop")
                 rows = [
                     json.loads(line)
                     for f in (Path(root) / "icomzero/auto-cq").glob("*.jsonl")
                     for line in f.read_text().splitlines()
                 ]
-                self.assertEqual(sum(r["event"] == "tx_scheduled" for r in rows), 2)
+                self.assertEqual(sum(r["event"] == "tx_scheduled" for r in rows), 1)
                 self.assertEqual(rows[-1]["event"], "session_stop")
                 self.assertTrue(rows[-1]["no_responses"])
             finally:

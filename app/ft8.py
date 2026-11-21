@@ -148,6 +148,8 @@ class Decoder:
         self.last_decoded_slot = None
         self.lock = threading.Lock()
         self.jobs = queue.Queue(maxsize=1)
+        self.capture_jobs = queue.Queue(maxsize=48)
+        self.capture_dropped = 0
         self.closed = threading.Event()
         self.generation = 0
         self.active = False
@@ -162,6 +164,8 @@ class Decoder:
         self.kernel = np.sinc(2 * 5000 / 48000 * n) * np.hamming(129)
         self.kernel /= self.kernel.sum()
         self.tail = np.zeros(128)
+        self.capture_thread = threading.Thread(target=self.capture_work, daemon=True)
+        self.capture_thread.start()
         self.thread = threading.Thread(target=self.work, daemon=True)
         self.thread.start()
 
@@ -182,9 +186,40 @@ class Decoder:
             )
 
     def feed(self, pcm, now=None):
-        now = time.time() if now is None else now
+        # Network callbacks must never wait on filtering, decoder or UI locks.
+        # Explicit timestamps retain deterministic synchronous offline injection.
+        if now is not None:
+            return self.capture(pcm, now)
+        item = (self.generation, time.time(), pcm, False)
+        try:
+            self.capture_jobs.put_nowait(item)
+        except queue.Full:
+            dropped = 0
+            while True:
+                try:
+                    self.capture_jobs.get_nowait()
+                    dropped += 1
+                except queue.Empty:
+                    break
+            self.capture_dropped += dropped
+            self.capture_jobs.put_nowait((item[0], item[1], pcm, True))
+
+    def capture_work(self):
+        while not self.closed.is_set():
+            try:
+                generation, stamp, pcm, reset = self.capture_jobs.get(timeout=0.1)
+            except queue.Empty:
+                continue
+            self.capture(pcm, stamp, generation=generation, reset=reset)
+
+    def capture(self, pcm, now, generation=None, reset=False):
         samples = np.frombuffer(pcm, dtype="<i2")
         with self.lock:
+            if generation is not None and generation != self.generation:
+                return
+            if reset:
+                self.anchor = None
+                self.status = "RX capture overrun; resynchronizing"
             if not self.active or not len(samples):
                 return
             duration = len(samples) / 48000
@@ -276,4 +311,5 @@ class Decoder:
     def close(self):
         self.activate(False)
         self.closed.set()
+        self.capture_thread.join(timeout=1)
         self.thread.join(timeout=13)

@@ -309,7 +309,7 @@ class PowerAndDisplay(unittest.TestCase):
 
 
 class SelectedMenus(unittest.TestCase):
-    def run_menu(self, manual=False, auto=False):
+    def run_menu(self, manual=False, auto=False, pota=False, fault=False):
         from PIL import ImageFont
 
         module = runpy.run_path(
@@ -320,7 +320,7 @@ class SelectedMenus(unittest.TestCase):
 
         def start(_):
             receiver.frequency = 7074000
-            receiver.radio_state = {"profile": DEFAULT_PROFILE, "mode": 1, "nr": False}
+            receiver.radio_state = {"profile": DEFAULT_PROFILE, "mode": 1, "nr": False, "tx_fault": "SWR telemetry lost — TX stopped" if fault else None}
 
         receiver.start = start
         receiver.busy = lambda: not receiver.stop.is_set()
@@ -377,10 +377,10 @@ class SelectedMenus(unittest.TestCase):
             def close(self):
                 pass
 
-        keys = [33, 15] + ([45] * 6 if manual else [45] * (2 if auto else 1)) + [28]
+        keys = [33, 15] + ([45] * 7 if manual else [45] * (3 if pota else (2 if auto else 1))) + [28]
         if manual:
             keys += [45] * 4 + [28]
-        keys += [1]
+        keys += [1, 1] if fault else [1]
         read, write = os.pipe()
         try:
             os.write(
@@ -428,3 +428,12 @@ class SelectedMenus(unittest.TestCase):
         actions, _ = self.run_menu(auto=True)
         self.assertTrue(any(args[0] == "auto_cq" for args, _ in actions))
         self.assertFalse(any(args[0] in ("cq", "reply") for args, _ in actions))
+
+    def test_enter_clears_rf_warning_without_answering_selected_decode(self):
+        actions, _ = self.run_menu(fault=True)
+        self.assertTrue(any(args[0] == "clear_fault" for args, _ in actions))
+        self.assertFalse(any(args[0] in ("cq", "reply", "auto_cq", "pota_hunt") for args, _ in actions))
+
+    def test_pota_hunt_menu_action_is_beneath_auto_cq(self):
+        actions, _ = self.run_menu(pota=True)
+        self.assertTrue(any(args[0] == "pota_hunt" for args, _ in actions))

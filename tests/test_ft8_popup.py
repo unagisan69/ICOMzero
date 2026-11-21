@@ -59,3 +59,26 @@ class PopupTests(unittest.TestCase):
         self.assertNotEqual(
             image.crop((260, 1, 312, 13)).getextrema(), ((23, 23), (77, 77), (54, 54))
         )
+
+    def test_decode_body_cache_keeps_live_tx_footer_fresh(self):
+        from unittest.mock import patch
+
+        h = History()
+        h.update([Message(100, 1500, "CQ W1AW FN31", -10)], "K1ABC")
+        with patch.dict(
+            self.ui["ft8_frame"].__globals__, {"message_country": lambda m: "USA"}
+        ) as _:
+            first = self.ui["ft8_frame"](self.display, h, "K1ABC", True, "", 0.1)
+        with patch.dict(
+            self.ui["ft8_frame"].__globals__,
+            {
+                "message_country": lambda m: (_ for _ in ()).throw(
+                    AssertionError("Unchanged decode body redrawn")
+                )
+            },
+        ):
+            second = self.ui["ft8_frame"](
+                self.display, h, "K1ABC", True, "", 0.5, transmitting=True
+            )
+        self.assertNotEqual(first.getpixel((30, 147)), second.getpixel((30, 147)))
+        self.assertEqual(second.getpixel((30, 147)), (240, 100, 100))

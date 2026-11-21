@@ -11,7 +11,7 @@ import uuid
 
 from ft8log import directory
 from ft8qso import call_fields
-from countries import country
+from countries import country, activation_cq
 
 
 class SessionLog:
@@ -94,6 +94,11 @@ class AutoCQ:
         self.sequence = sequence
         self.emit = emit
         self.active = False
+        self.mode = "auto"
+        self.own_cq_limit = 1
+        self.target_limit = 5
+        self.rest_until = 0
+        self.pota_cooldown = {}
         self.cq_count = self.contact_count = 0
         self.seen = OrderedDict()
         self.queue = OrderedDict()
@@ -110,6 +115,7 @@ class AutoCQ:
         try:
             self.emit(
                 event,
+                mode=self.mode,
                 dial_hz=s.dial,
                 tx_audio_hz=s.hz,
                 stage=s.stage,
@@ -128,7 +134,10 @@ class AutoCQ:
             self.sequence.stop("Auto CQ log failed; TX stopped")
             raise OSError("Auto CQ log failed; TX stopped") from error
 
-    def start(self, dial):
+    def start(self, dial, mode="auto"):
+        self.mode = mode
+        self.pota_cooldown.clear()
+        self.rest_until = 0
         self.cq_count = self.contact_count = 0
         self.seen.clear()
         self.queue.clear()
@@ -143,13 +152,15 @@ class AutoCQ:
         self.sequence.cq(dial)
         self.sequence.repeat_limit = self.sequence.timeout_seconds = None
         self.active = True
+        if mode == "pota":
+            self._monitor("POTA Hunt monitoring", rest=False)
         self.record(
             "session_start",
             policy={
-                "own_cqs": 2,
-                "cq_targets": 2,
-                "target_calls": 2,
-                "contact_stage_attempts": 4,
+                "own_cqs": 0 if mode == "pota" else self.own_cq_limit,
+                "cq_targets": "continuous" if mode == "pota" else self.target_limit,
+                "target_calls": 3 if mode == "pota" else 2,
+                "contact_stage_attempts": 3 if mode == "pota" else 4,
                 "cq_max_age_s": 90,
                 "queue_max_age_s": 120,
                 "queue_limit": 16,
@@ -202,6 +213,49 @@ class AutoCQ:
             if now - message.slot * 15 > 90 or call in self.completed:
                 del self.cqs[call]
 
+    def _monitor(self, reason, rest=True):
+        now = time.time()
+        call = self.sequence.partner
+        if rest and call:
+            self.pota_cooldown[call] = now + 60
+        self.sequence.begin(self.sequence.dial)
+        self.sequence.repeat_limit = self.sequence.timeout_seconds = None
+        self.sequence.stage = "monitor"
+        self.sequence.message = ""
+        self.sequence.status = "POTA Hunt resting" if rest else "POTA Hunt monitoring"
+        self.rest_until = now + 15 if rest else now
+        self.contact_count = self.cq_count = 0
+        self.hunt_waiting = False
+        if rest:
+            self.record(
+                "pota_rest",
+                reason=reason,
+                previous_partner=call,
+                rest_seconds=15,
+                station_cooldown_seconds=60,
+            )
+
+    def _pota_next(self, now):
+        self._prune(now)
+        if now < self.rest_until:
+            return False
+        self.sequence.status = "POTA Hunt monitoring"
+        candidates = sorted(
+            (
+                m
+                for call, m in self.cqs.items()
+                if activation_cq(m)
+                and call not in self.completed
+                and now >= self.pota_cooldown.get(call, 0)
+            ),
+            key=lambda m: (m.slot, m.snr),
+            reverse=True,
+        )
+        for message in candidates:
+            if self._target(message, "pota"):
+                return True
+        return False
+
     def _restart_cq(self, reason):
         self.record("cq_resume", reason=reason, completed_partner=self.sequence.partner)
         self.sequence.cq(self.sequence.dial)
@@ -227,6 +281,10 @@ class AutoCQ:
             self.record("target_rejected", call=call, reason=str(error), source=source)
             return False
         self.sequence.repeat_limit = self.sequence.timeout_seconds = None
+        if source == "pota":
+            self.sequence.allow_unprompted_report = True
+            self.sequence.received = None
+            self.sequence.set_message("rreport", f"R{self.sequence.sent:+03d}")
         self.contact_count = self.cq_count = 0
         self.hunt_waiting = source == "cq"
         self.attempted.add(call)
@@ -243,6 +301,8 @@ class AutoCQ:
         return True
 
     def _queued(self, now):
+        if self.mode == "pota":
+            return False
         self._prune(now)
         while self.queue:
             call, message = self.queue.popitem(last=False)
@@ -264,7 +324,7 @@ class AutoCQ:
             reverse=True,
         )
         for message in candidates:
-            if len(self.fallback_used) >= 2:
+            if len(self.fallback_used) >= self.target_limit:
                 break
             call, _ = call_fields(message)
             if self._target(message, "cq"):
@@ -274,6 +334,9 @@ class AutoCQ:
         self.stop("Auto CQ ended: no replies / fresh CQ targets", no_response=True)
 
     def _after_contact(self, reason, now):
+        if self.mode == "pota":
+            self._monitor(reason)
+            return
         self.hunt_waiting = False
         if not self._queued(now):
             self._restart_cq(reason)
@@ -329,6 +392,7 @@ class AutoCQ:
         queued = False
         if (
             eligible
+            and self.mode != "pota"
             and len(parts) == 3
             and parts[0] == own
             and call != s.partner
@@ -420,6 +484,8 @@ class AutoCQ:
         s = self.sequence
         if s.pending:
             return False
+        if self.mode == "pota" and s.stage == "monitor":
+            return self._pota_next(now)
         if s.stage == "cq" and s.last_sent_slot is None and self.queue:
             return self._queued(now)
         if s.last_sent_slot is None:
@@ -429,20 +495,28 @@ class AutoCQ:
         )
         if not ready:
             return False
-        if s.stage == "cq" and self.cq_count >= 2:
+        if s.stage == "cq" and self.cq_count >= self.own_cq_limit:
             self.record("own_cq_exhausted")
             self._hunt_next(now)
             return True
-        limit = 2 if self.hunt_waiting else 4
+        limit = 3 if self.mode == "pota" else (2 if self.hunt_waiting else 4)
         if s.stage != "cq" and self.contact_count >= limit:
             hunting = self.hunt_waiting
             self.record(
                 "contact_abandoned",
                 reason=(
-                    "2_unanswered_target_calls" if hunting else "4_unanswered_attempts"
+                    "3_unanswered_attempts"
+                    if self.mode == "pota"
+                    else (
+                        "2_unanswered_target_calls"
+                        if hunting
+                        else "4_unanswered_attempts"
+                    )
                 ),
             )
-            if hunting:
+            if self.mode == "pota":
+                self._monitor("3_unanswered_attempts")
+            elif hunting:
                 self._hunt_next(now)
             else:
                 self._after_contact("contact_no_response", now)
@@ -456,6 +530,8 @@ class AutoCQ:
         # If no receive callback prepared a transition, let the controller
         # encode the new target on its next iteration before queuing audio.
         if self.prepare(now):
+            return None
+        if self.sequence.stage == "monitor":
             return None
         pending = self.sequence.next(now)
         if pending:

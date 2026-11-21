@@ -59,6 +59,12 @@ def record_fault(receiver, reason, job=None):
             "model": state.get("profile", {}).get("model"),
             "frequency": receiver.frequency,
             "power_control": state.get("tx_power"),
+            "transport_gap_ms": state.get("transport_gap_ms"),
+            "transport_gap_age_s": (
+                round(now - state["transport_gap_at"], 3)
+                if state.get("transport_gap_at") is not None
+                else None
+            ),
             "ptt": state.get("ptt"),
             "ptt_pending": state.get("ptt_pending"),
             "tuner": state.get("tuner"),
@@ -143,6 +149,10 @@ class Station:
         return self.auto.active
 
     @property
+    def automation_label(self):
+        return "POTA" if self.auto.mode == "pota" else "AUTO"
+
+    @property
     def queued_count(self):
         return len(self.auto.queue)
 
@@ -187,7 +197,7 @@ class Station:
         return added
 
     def action(self, action, value=None, dial=7074000):
-        if action in ("cq", "reply", "auto_cq") and self.tuning:
+        if action in ("cq", "reply", "auto_cq", "pota_hunt") and self.tuning:
             self.status = "Wait for automatic tuning"
             return
         self.version += 1
@@ -201,7 +211,7 @@ class Station:
             self.active = False
             self.tuning = False
             self.status = "Transmit stopped"
-        elif action in ("cq", "reply", "auto_cq"):
+        elif action in ("cq", "reply", "auto_cq", "pota_hunt"):
             self.active = True
 
     def run(self):
@@ -310,9 +320,11 @@ class Station:
                     if not self.receiver.busy() or self.receiver.frequency != dial:
                         raise ValueError("Wait for the radio connection")
                     self.sequence.settings = load_settings()
-                    if action == "auto_cq":
+                    if action in ("auto_cq", "pota_hunt"):
                         self.journal = SessionLog()
-                        self.auto.start(dial)
+                        self.auto.start(
+                            dial, mode="pota" if action == "pota_hunt" else "auto"
+                        )
                         self.auto.record(
                             "radio_ready",
                             model=profile.get("model"),
@@ -445,7 +457,7 @@ class Station:
                     except OSError:
                         self.receiver.stop_tx()
                 # Encode during RX, not after entering the small key-up window.
-                if self.sequence.enabled:
+                if self.sequence.enabled and self.sequence.stage != "monitor":
                     key = (
                         self.sequence.message,
                         self.sequence.hz,
@@ -535,6 +547,8 @@ class Station:
                                 "alc",
                                 "watts",
                                 "tx_power",
+                                "transport_gap_ms",
+                                "transport_gap_at",
                             )
                         },
                         logging_status=self.logbook.status,

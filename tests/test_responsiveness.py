@@ -93,6 +93,14 @@ class PacketRecovery(unittest.TestCase):
         self.assertIsNone(self.channel.receive())
         self.assertEqual(HEADER.unpack_from(self.socket.sent[-1])[1:3], (0, 999))
 
+    def test_packet_drain_yields_to_deadlines_during_slow_processing(self):
+        for seq in range(40):
+            self.packet(seq)
+        with patch("radio.time.monotonic", side_effect=[0, .004]):
+            first = list(self.channel.drain(budget=.003))
+        self.assertEqual(len(first), 1)
+        self.assertEqual(len(list(self.channel.drain())), 39)
+
 
 class Tuning(unittest.TestCase):
     def test_tuning_preempts_polls_retries_loss_and_coalesces_new_target(self):
