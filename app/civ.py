@@ -386,7 +386,7 @@ class Civ:
                     if not self.tx_enabled or not self.protection.fault:
                         self.tuning_requested = self.tx_enabled
                         self.tune_started = None
-                        self.protection.started = None
+                        self.protection.end()
                         self.schedule(b"\x1c\x01\x02", urgent=True)
             if self.tune_target is not None and now >= self.tune_until:
                 self.tune_target = None
@@ -540,6 +540,13 @@ class Civ:
                     self.ptt_pending = False
                 elif self.ptt_pending:
                     self.ptt_query_at = 0
+                if (
+                    not self.ptt_state
+                    and not self.ptt_pending
+                    and not self.tuning_requested
+                    and self.tuner_state != 2
+                ):
+                    self.protection.end()
                 self.on_state("ptt_readback_at", self.ptt_at)
                 self.on_state("ptt_pending", self.ptt_pending)
                 self.on_state("ptt", self.ptt_state)
@@ -574,7 +581,7 @@ class Civ:
                     and not self.ptt_state
                 ):
                     self.tuning_requested = False
-                    self.protection.started = None
+                    self.protection.end()
             elif command.startswith(b"\x27\x00\x00") and not self.tx_enabled:
                 result = self.scope.parse(command[3:])
                 if result:

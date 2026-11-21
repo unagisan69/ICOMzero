@@ -53,6 +53,11 @@ class Protection:
             self.publish("tx_fault", reason)
         return self.fault
 
+    def end(self):
+        """Confirmed RX ends this RF episode; keep any fault latched."""
+        self.started = None
+        self.alc_since = None
+
     def clear(self):
         self.fault = None
         self.started = None

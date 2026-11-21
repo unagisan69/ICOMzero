@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.5 — 2026-11-21
+
+- End RF telemetry assessment when RX is confirmed, keeping any real fault latched. Begin a new episode only when the next PTT-on is sent.
+- Fix false SWR telemetry-loss faults between CQ cycles when command pacing briefly delays the next PTT request.
+- Apply matching RX confirmation to Kenwood as well, so an early RX readback cannot end a newly requested TX episode.
+- Add a deterministic regression reproducing a 30-second CQ gap and deferred PTT dispatch; retain all active-RF SWR/ALC and telemetry-loss limits.
+
 ## 0.7.4 — 2026-11-21
 
 - Prepare FT8 waveforms before the transmit slot and queue frames within its first 200 ms. Request PTT up to 500 ms before the unchanged UTC slot +0.5-second audio start.

@@ -101,6 +101,7 @@ class Cat:
         self.preparing = self.prepared = False
         self.ptt_state = False
         self.ptt_pending = False
+        self.ptt_expected = None
         self.authenticated = False
         self.original_scope = None
         self.nr = None
@@ -148,8 +149,16 @@ class Cat:
             and command[28] in "01"
         ):
             self.ptt_state = command[28] == "1"
-            self.ptt_pending = False
-            self.on_state("ptt_pending", False)
+            if self.ptt_expected is None or self.ptt_state == self.ptt_expected:
+                self.ptt_pending = False
+            if (
+                not self.ptt_state
+                and not self.ptt_pending
+                and not self.tuning_requested
+                and self.tuner_state != 2
+            ):
+                self.protection.end()
+            self.on_state("ptt_pending", self.ptt_pending)
             self.on_state("ptt", self.ptt_state)
         elif (
             self.tx_enabled
@@ -202,7 +211,7 @@ class Cat:
                 and not self.ptt_state
             ):
                 self.tuning_requested = False
-                self.protection.started = None
+                self.protection.end()
         elif (
             command.startswith("DD0")
             and command[3:].isdigit()
@@ -277,6 +286,7 @@ class Cat:
                 self.protection.begin()
             self.send("TX0" if enabled else "RX")
             self.ptt_pending = True
+            self.ptt_expected = enabled
             self.on_state("ptt_pending", True)
             self.send("IF")
 
