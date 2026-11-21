@@ -2,3 +2,7 @@
 __pycache__/
 .DS_Store
 radio.json
+
+ft8.json
+qsos.sqlite3*
+contacts.adi

@@ -8,6 +8,8 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <time.h>
+#include <math.h>
+#include <ft8/encode.h>
 #include <ft8/decode.h>
 #include <ft8/message.h>
 #include <common/monitor.h>
@@ -108,6 +110,45 @@ ftx_callsign_hash_interface_t hash_if = {
     .save_hash = hashtable_add
 };
 
+/* Approximate SNR in a 2500 Hz reference bandwidth, from spectral energy.
+ * Integrate the reconstructed tone's Hann main lobe, subtract local median
+ * noise (corrected for exponential-power median), and normalize by bandwidth.
+ * This is independent of the Costas synchronization score. */
+static int compare_float(const void *a, const void *b) {
+    float x=*(const float*)a, y=*(const float*)b; return (x>y)-(x<y);
+}
+static float power_at(const ftx_waterfall_t *wf, int block, int sub, int q) {
+    int bin=q/wf->freq_osr, fs=q%wf->freq_osr;
+    int index=block*wf->block_stride+(sub*wf->freq_osr+fs)*wf->num_bins+bin;
+    return powf(10.0f, WF_ELEM_MAG(wf->mag[index])/10.0f);
+}
+static int estimate_snr(const monitor_t *mon, const ftx_candidate_t *cand, const ftx_message_t *msg) {
+    const ftx_waterfall_t *wf=&mon->wf;
+    uint8_t tones[79]; ft8_encode(msg->payload,tones);
+    double energy=0, noise_sum=0; int used=0;
+    int limit=wf->num_bins*wf->freq_osr;
+    for(int k=0;k<79;k++) {
+        int block=cand->time_offset+k;
+        if(block<0 || block>=wf->num_blocks) continue;
+        int base=cand->freq_offset*wf->freq_osr+cand->freq_sub;
+        int center=base+tones[k]*wf->freq_osr;
+        if(center<2 || center+2>=limit) continue;
+        float noise[160]; int n=0;
+        for(int q=base-70;q<=base+84 && n<160;q++)
+            if(q>=0 && q<limit && (q<base-5 || q>base+19))
+                noise[n++]=power_at(wf,block,cand->time_sub,q);
+        if(n<20) continue;
+        qsort(noise,n,sizeof(float),compare_float);
+        float floor=noise[n/2]/0.69314718f;
+        float total=0;
+        for(int q=center-2;q<=center+2;q++) total+=power_at(wf,block,cand->time_sub,q);
+        energy+=total-5*floor; noise_sum+=floor; used++;
+    }
+    if(!used || energy<=0 || noise_sum<=0) return -50;
+    float snr=10*log10f((float)(energy/noise_sum)*(6.25f/wf->freq_osr)/2500.0f);
+    return (int)lroundf(fmaxf(-50,fminf(49,snr)));
+}
+
 static void decode(const monitor_t* mon)
 {
     const ftx_waterfall_t* wf = &mon->wf;
@@ -199,7 +240,7 @@ static void decode(const monitor_t* mon)
             if (unpack_status != FTX_MESSAGE_RC_OK)
                 continue;
 
-            printf("%.2f\t%.1f\t%s\n", time_sec, freq_hz, text);
+            printf("%.2f\t%.1f\t%d\t%s\n", time_sec, freq_hz, estimate_snr(mon, cand, &message), text);
 
         }
     }

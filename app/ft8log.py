@@ -1,0 +1,294 @@
+"""Private station configuration, durable ADIF log and independent upload outboxes."""
+
+from pathlib import Path
+from contextlib import contextmanager
+import hashlib
+import json
+import os
+import queue
+import re
+import sqlite3
+import tempfile
+import threading
+import time
+import urllib.parse
+import urllib.request
+
+
+def directory():
+    return Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "icomzero"
+
+
+DEFAULTS = {
+    "callsign": "",
+    "grid": "",
+    "tx_hz": "1500",
+    "tx_level": "50",
+    "cq_period": "Even",
+    "wavelog_url": "",
+    "wavelog_key": "",
+    "wavelog_station": "",
+    "wavelog_enabled": False,
+    "qrz_key": "",
+    "qrz_enabled": False,
+}
+
+
+def load_settings():
+    try:
+        values = json.loads((directory() / "ft8.json").read_text())
+        return {**DEFAULTS, **{k: v for k, v in values.items() if k in DEFAULTS}}
+    except (OSError, ValueError, AttributeError):
+        return dict(DEFAULTS)
+
+
+def validate_station(settings):
+    if not re.fullmatch(
+        r"[A-Z0-9]{1,4}[0-9][A-Z0-9]{1,4}(?:/[A-Z0-9]{1,4})?", settings["callsign"]
+    ):
+        raise ValueError("Enter a valid callsign")
+    if not re.fullmatch(r"[A-R]{2}[0-9]{2}(?:[A-X]{2})?", settings["grid"]):
+        raise ValueError("Enter a 4 or 6 character grid")
+    if not 200 <= int(settings["tx_hz"]) <= 2800:
+        raise ValueError("TX audio must be 200–2800 Hz")
+    if not 10 <= int(settings.get("tx_level", "50")) <= 80:
+        raise ValueError("TX level must be 10–80%")
+
+
+def save_settings(values):
+    directory().mkdir(parents=True, exist_ok=True, mode=0o700)
+    with tempfile.NamedTemporaryFile(mode="w", dir=directory(), delete=False) as f:
+        try:
+            json.dump({k: v for k, v in values.items() if k in DEFAULTS}, f)
+            f.flush()
+            os.fsync(f.fileno())
+            os.replace(f.name, directory() / "ft8.json")
+        finally:
+            Path(f.name).unlink(missing_ok=True)
+
+
+def request(url, data, form=False):
+    if not url.startswith("https://"):
+        raise ValueError("Logging requires HTTPS")
+    body = (
+        None
+        if data is None
+        else (
+            urllib.parse.urlencode(data).encode() if form else json.dumps(data).encode()
+        )
+    )
+    req = urllib.request.Request(
+        url,
+        body,
+        headers={
+            "Content-Type": (
+                "application/x-www-form-urlencoded" if form else "application/json"
+            ),
+            "Accept": "application/json",
+            "User-Agent": "ICOMzero/0.6.0",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=10) as response:
+        text = response.read(2 * 1024 * 1024).decode("utf-8")
+    return dict(urllib.parse.parse_qsl(text)) if form else json.loads(text)
+
+
+def wavelog_station(settings):
+    result = request(
+        settings["wavelog_url"].rstrip("/")
+        + "/api/station_info/"
+        + urllib.parse.quote(settings["wavelog_key"], safe=""),
+        None,
+    )
+    stations = result if isinstance(result, list) else result.get("stations", [])
+    matches = [
+        s
+        for s in stations
+        if s.get("station_callsign", "").upper() == settings["callsign"]
+    ]
+    matches.sort(
+        key=lambda s: (
+            s.get("station_gridsquare", "").upper() != settings["grid"],
+            str(s.get("station_active")) != "1",
+        )
+    )
+    if not matches:
+        raise ValueError("No matching Wavelog station")
+    return str(matches[0]["station_id"])
+
+
+def test_service(service, settings):
+    if service == "wavelog":
+        return "Station " + wavelog_station(settings)
+    result = request(
+        "https://logbook.qrz.com/api",
+        {"KEY": settings["qrz_key"], "ACTION": "STATUS"},
+        True,
+    )
+    if result.get("RESULT") != "OK":
+        raise ValueError("QRZ authentication/subscription failed")
+    return "QRZ connected"
+
+
+def adif(qso):
+    start = time.gmtime(qso["start"])
+    end = time.gmtime(qso["end"])
+    fields = {
+        "CALL": qso["call"],
+        "STATION_CALLSIGN": qso["own_call"],
+        "MY_GRIDSQUARE": qso["own_grid"],
+        "MODE": "FT8",
+        "FREQ": f"{qso['dial']/1e6:.6f}",
+        "BAND": qso["band"],
+        "QSO_DATE": time.strftime("%Y%m%d", start),
+        "TIME_ON": time.strftime("%H%M%S", start),
+        "QSO_DATE_OFF": time.strftime("%Y%m%d", end),
+        "TIME_OFF": time.strftime("%H%M%S", end),
+        "RST_SENT": f"{qso['sent']:+03d}",
+        "RST_RCVD": f"{qso['received']:+03d}",
+        "GRIDSQUARE": qso.get("grid", ""),
+        "APP_ICOMZERO_ID": qso["id"],
+    }
+    return (
+        "".join(f"<{k}:{len(str(v))}>{v}" for k, v in fields.items() if v != "")
+        + "<EOR>"
+    )
+
+
+class Logbook:
+    def __init__(self):
+        directory().mkdir(parents=True, exist_ok=True, mode=0o700)
+        self.path = directory() / "qsos.sqlite3"
+        with self.db() as db:
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS qsos (id TEXT PRIMARY KEY, payload TEXT NOT NULL, adif TEXT NOT NULL)"
+            )
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS deliveries (id TEXT, service TEXT, state TEXT, error TEXT, PRIMARY KEY(id,service))"
+            )
+        os.chmod(self.path, 0o600)
+        self.closed = threading.Event()
+        self.wake = threading.Event()
+        self.status = "Local log ready"
+        self.thread = threading.Thread(target=self.work, daemon=True)
+        self.thread.start()
+        self.wake.set()
+
+    @contextmanager
+    def db(self):
+        connection = sqlite3.connect(self.path, timeout=5)
+        try:
+            with connection:
+                yield connection
+        finally:
+            connection.close()
+
+    def add(self, qso):
+        settings = load_settings()
+        with self.db() as db:
+            db.execute(
+                "INSERT OR IGNORE INTO qsos VALUES (?,?,?)",
+                (qso["id"], json.dumps(qso), adif(qso)),
+            )
+            for service in ("wavelog", "qrz"):
+                if settings[service + "_enabled"]:
+                    db.execute(
+                        "INSERT OR IGNORE INTO deliveries VALUES (?,?,?,?)",
+                        (qso["id"], service, "pending", ""),
+                    )
+        self.status = "Contact saved locally"
+        self.wake.set()
+
+    def recent(self):
+        with self.db() as db:
+            rows = db.execute(
+                "SELECT payload FROM qsos ORDER BY rowid DESC LIMIT 100"
+            ).fetchall()
+        return [json.loads(row[0]) for row in rows]
+
+    def summary(self):
+        with self.db() as db:
+            rows = db.execute(
+                "SELECT service,state,count(*) FROM deliveries GROUP BY service,state"
+            ).fetchall()
+        return [f"{service}: {count} {state}" for service, state, count in rows] or [
+            "No uploads queued"
+        ]
+
+    def sync(self):
+        self.wake.set()
+
+    def work(self):
+        retry_at = time.monotonic() + 60
+        while not self.closed.is_set():
+            if not self.wake.wait(0.5):
+                if time.monotonic() < retry_at:
+                    continue
+            retry_at = time.monotonic() + 60
+            self.wake.clear()
+            with self.db() as db:
+                pending = db.execute(
+                    "SELECT d.id,d.service,q.adif FROM deliveries d JOIN qsos q ON q.id=d.id WHERE d.state=?",
+                    ("pending",),
+                ).fetchall()
+            for qso_id, service, record in pending:
+                if self.closed.is_set():
+                    break
+                settings = load_settings()
+                if not settings.get(service + "_enabled"):
+                    continue
+                try:
+                    if service == "wavelog":
+                        station = settings["wavelog_station"] or wavelog_station(
+                            settings
+                        )
+                        result = request(
+                            settings["wavelog_url"].rstrip("/") + "/api/qso",
+                            {
+                                "key": settings["wavelog_key"],
+                                "station_profile_id": station,
+                                "type": "adif",
+                                "string": record,
+                            },
+                        )
+                        if str(result.get("status", "")).lower() not in (
+                            "created",
+                            "success",
+                            "ok",
+                        ):
+                            raise ValueError("Wavelog rejected upload")
+                    else:
+                        result = request(
+                            "https://logbook.qrz.com/api",
+                            {
+                                "KEY": settings["qrz_key"],
+                                "ACTION": "INSERT",
+                                "ADIF": record,
+                            },
+                            True,
+                        )
+                        if result.get("RESULT") != "OK":
+                            reason = result.get("REASON", "").lower()
+                            if not (
+                                "duplicate" in reason or "already exists" in reason
+                            ):
+                                raise ValueError("QRZ rejected upload")
+                    with self.db() as db:
+                        db.execute(
+                            "UPDATE deliveries SET state=?,error=? WHERE id=? AND service=?",
+                            ("sent", "", qso_id, service),
+                        )
+                    self.status = service.title() + " upload complete"
+                except Exception as error:
+                    # Never retain server bodies/URLs that may contain credentials.
+                    with self.db() as db:
+                        db.execute(
+                            "UPDATE deliveries SET error=? WHERE id=? AND service=?",
+                            (type(error).__name__, qso_id, service),
+                        )
+                    self.status = service.title() + " pending; retry in Logging"
+
+    def close(self):
+        self.closed.set()
+        self.wake.set()
+        self.thread.join(timeout=0.5)

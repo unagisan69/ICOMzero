@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.6.0 — 2026-11-21
+
+- Show eleven smaller FT8 rows with spectral SNR estimates, CQ/own-call filtering, own-call highlighting and stable line selection.
+- Support F/X, Fn+F/Fn+X and arrow aliases for scrolling, including held keys; Enter answers the selected decode.
+- Replace the FT8 footer with Tab - Menu and add Bands, Call CQ, Settings, Stop Transmit, Logging and Help.
+- Add private callsign/grid settings, timed GFSK transmission and standard contact sequencing using RRR.
+- Add direct Icom and TS-890S transmit audio, paced/read-back PTT, cancellation, watchdogs, confirmed split/RIT/XIT-off setup and restoration.
+- Recover automatically if receive audio is present but initial CAT state never becomes ready.
+- Decode near 14 seconds for timely replies, then merge a full-period pass without duplicate rows.
+- Require NTP synchronization for TX, show clock status, check reported offset and cancel on clock jumps.
+- Save completed QSOs locally as ADIF-backed records and upload independently to Wavelog/QRZ with durable retry queues.
+- Fix a control-startup race where unsolicited scope data could suppress the required Icom CI-V open handshake.
+- Pass 48 regression tests, including 48 kHz waveform round trips, SNR calibration, both contact roles, incomplete contacts, navigation, clocks, PTT and logging retries.
+- Verify live IC-7300MK2 transmission and PTT-off, clock synchronization, and read-only Wavelog/QRZ access. Live contact attempts received no completed exchange; successful-QSO/logging paths are validated in simulation.
+
 ## 0.5.1 — 2026-11-21
 
 - Show nine FT8 decodes per page with alternating row and text colors.

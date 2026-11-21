@@ -1,7 +1,8 @@
-"""TS-890S native KNS TCP control and 16 kHz LPCM RTP receive audio.
+"""TS-890S native KNS TCP control and 16 kHz LPCM RTP audio.
 
 Protocol reference: wfview kenwoodCommander and rtpAudio at the radios.json commit.
 """
+
 from array import array
 from contextlib import suppress
 import select
@@ -20,6 +21,7 @@ MODE_FROM_ICOM = {value: key for key, value in MODE_TO_ICOM.items()}
 
 class Pcm:
     """Convert streaming 16 kHz little-endian mono to the app's 48 kHz PCM."""
+
     def __init__(self):
         self.previous = None
 
@@ -32,7 +34,9 @@ class Pcm:
         for sample in source:
             if previous is None:
                 previous = sample
-            output.extend((previous, (2 * previous + sample) // 3, (previous + 2 * sample) // 3))
+            output.extend(
+                (previous, (2 * previous + sample) // 3, (previous + 2 * sample) // 3)
+            )
             previous = sample
         self.previous = previous
         if sys.byteorder != "little":
@@ -61,10 +65,33 @@ def rtp_payload(data):
 
 
 class Cat:
-    def __init__(self, send, user, password, admin, on_frequency, on_scope, on_state):
+    def __init__(
+        self,
+        send,
+        user,
+        password,
+        admin,
+        on_frequency,
+        on_scope,
+        on_state,
+        tx_enabled=False,
+    ):
         self.send = send
         self.user, self.password, self.admin = user, password, admin
-        self.on_frequency, self.on_scope, self.on_state = on_frequency, on_scope, on_state
+        self.on_frequency, self.on_scope, self.on_state = (
+            on_frequency,
+            on_scope,
+            on_state,
+        )
+        self.tx_enabled = tx_enabled
+        self.frequency = self.mode = None
+        self.controls = {}
+        self.original_controls = {}
+        self.sources = {}
+        self.original_sources = {}
+        self.preparing = self.prepared = False
+        self.ptt_state = False
+        self.ptt_pending = False
         self.authenticated = False
         self.original_scope = None
         self.nr = None
@@ -77,8 +104,10 @@ class Cat:
         if command.startswith("##CN"):
             if command != "##CN1":
                 raise RadioError("Radio refused the connection")
-            self.send(f"##ID{0 if self.admin else 1}{len(self.user):02d}{len(self.password):02d}"
-                      f"{self.user}{self.password}")
+            self.send(
+                f"##ID{0 if self.admin else 1}{len(self.user):02d}{len(self.password):02d}"
+                f"{self.user}{self.password}"
+            )
         elif command.startswith("##ID"):
             if command != "##ID1":
                 raise RadioError("Radio rejected the login")
@@ -89,11 +118,37 @@ class Cat:
                 for query in ("ID", "DD0", "##VP1", "FA", "OM0", "NR", "AC"):
                     self.send(query)
         elif command.startswith("FA") and command[2:].isdigit():
-            self.on_frequency(int(command[2:]))
+            self.frequency = int(command[2:])
+            self.on_frequency(self.frequency)
         elif command.startswith("OM0") and command[3:].isdigit():
             mode = MODE_TO_ICOM.get(int(command[3:4]))
             if mode is not None:
+                self.mode = mode
                 self.on_state("mode", mode)
+        elif (
+            self.tx_enabled and command[:3] in ("MS0", "MS1") and command[3:].isdigit()
+        ):
+            source = command[:3]
+            value = int(command[3:])
+            self.sources[source] = value
+            self.original_sources.setdefault(source, value)
+        elif (
+            self.tx_enabled
+            and command.startswith("IF")
+            and len(command) > 28
+            and command[28] in "01"
+        ):
+            self.ptt_state = command[28] == "1"
+            self.ptt_pending = False
+            self.on_state("ptt_pending", False)
+            self.on_state("ptt", self.ptt_state)
+        elif (
+            self.tx_enabled
+            and command[:2] in ("TB", "RT", "XT")
+            and command[2:] in ("0", "1")
+        ):
+            self.controls[command[:2]] = int(command[2:])
+            self.original_controls.setdefault(command[:2], int(command[2:]))
         elif command.startswith("NR") and command[2:] in ("0", "1", "2"):
             self.nr = int(command[2:]) != 0
             if self.pending_nr:
@@ -103,7 +158,11 @@ class Cat:
         elif command.startswith("AC") and len(command) == 5 and command[2:].isdigit():
             state = 2 if command[-1] != "0" else int(command[-2] != "0")
             self.on_state("tuner", state)
-        elif command.startswith("DD0") and command[3:].isdigit() and self.original_scope is None:
+        elif (
+            command.startswith("DD0")
+            and command[3:].isdigit()
+            and self.original_scope is None
+        ):
             self.original_scope = command[3:]
             self.send("DD01")
         elif command.startswith("DD4"):
@@ -127,8 +186,11 @@ class Cat:
                 self.next_part = None
                 return
             first, second = int(data[3:14]), int(data[14:25])
-            self.edges = ((second - first // 2, second + first // 2) if data[2] == "0"
-                          else (first, second))
+            self.edges = (
+                (second - first // 2, second + first // 2)
+                if data[2] == "0"
+                else (first, second)
+            )
             return
         if part != self.next_part or not self.edges:
             self.next_part = None
@@ -150,7 +212,9 @@ class Cat:
         start, end = self.edges
         if not 0 < start < end:
             return
-        levels = bytes(max(0, PROFILE["scope_max"] - v) * 160 // PROFILE["scope_max"] for v in raw)
+        levels = bytes(
+            max(0, PROFILE["scope_max"] - v) * 160 // PROFILE["scope_max"] for v in raw
+        )
         self.on_scope(start, end, levels)
 
     def toggle_noise(self):
@@ -161,8 +225,46 @@ class Cat:
             self.nr = not self.nr
             self.send(f"NR{int(self.nr)}")
 
+    def ptt(self, enabled):
+        if self.tx_enabled:
+            self.send("TX0" if enabled else "RX")
+            self.ptt_pending = True
+            self.on_state("ptt_pending", True)
+            self.send("IF")
+
+    def tx_ready(self, dial):
+        return (
+            self.tx_enabled
+            and self.prepared
+            and self.sources.get("MS0") == 3
+            and self.sources.get("MS1") == 3
+            and self.frequency == dial
+            and self.mode == 1
+            and all(self.controls.get(name) == 0 for name in ("TB", "RT", "XT"))
+        )
+
+    def tx_poll(self):
+        if (
+            self.preparing
+            and not self.prepared
+            and len(self.original_sources) == 2
+            and len(self.original_controls) == 3
+            and not self.ptt_state
+            and not self.ptt_pending
+        ):
+            self.send("MS003")
+            self.send("MS103")
+            for query in ("TB", "RT", "XT"):
+                self.send(query + "0")
+            self.prepared = True
+        for query in ("MS0", "MS1", "IF", "TB", "RT", "XT"):
+            self.send(query)
+        self.on_state("tx_ready", self.tx_ready(self.frequency))
+
     def action(self, action, value):
-        if action == "mode" and value in MODE_FROM_ICOM:
+        if action == "ft8_prepare" and self.tx_enabled:
+            self.preparing = True
+        elif action == "mode" and value in MODE_FROM_ICOM:
             self.send(f"OM0{MODE_FROM_ICOM[value]}")
         elif action == "nr":
             self.toggle_noise()
@@ -170,49 +272,134 @@ class Cat:
             self.send("AC111")
 
     def close(self):
+        if self.tx_enabled:
+            self.ptt(False)
+            if self.prepared:
+                for source, value in self.original_sources.items():
+                    self.send(f"{source}{value:02d}")
+                for query, value in self.original_controls.items():
+                    self.send(f"{query}{value}")
         self.send("##VP0")
         if self.original_scope is not None:
             self.send("DD0" + self.original_scope)
 
 
-def listen(host, port, username, password, stop, on_status, on_audio,
-           on_frequency, on_scope, take_tune, take_commands, on_state, audio_port, admin):
+def listen(
+    host,
+    port,
+    username,
+    password,
+    stop,
+    on_status,
+    on_audio,
+    on_frequency,
+    on_scope,
+    take_tune,
+    take_commands,
+    on_state,
+    audio_port,
+    admin,
+    tx_enabled=False,
+    take_tx=lambda: None,
+):
     for value in (username, password):
-        if not 1 <= len(value) <= 99 or any(not 32 <= ord(c) <= 126 or c == ";" for c in value):
-            raise RadioError("KNS login requires 1–99 ASCII characters without semicolons")
+        if not 1 <= len(value) <= 99 or any(
+            not 32 <= ord(c) <= 126 or c == ";" for c in value
+        ):
+            raise RadioError(
+                "KNS login requires 1–99 ASCII characters without semicolons"
+            )
     on_status("Finding radio")
     address = socket.gethostbyname(host)
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as audio:
         audio.bind(("", audio_port))
         audio.setblocking(False)
         with socket.create_connection((address, port), timeout=5) as control:
+
             def send(command):
                 control.sendall(command.encode("ascii") + b";\n")
 
-            cat = Cat(send, username, password, admin, on_frequency, on_scope, on_state)
+            cat = Cat(
+                send,
+                username,
+                password,
+                admin,
+                on_frequency,
+                on_scope,
+                on_state,
+                tx_enabled,
+            )
             pcm = Pcm()
             buffer = bytearray()
             last_seq = None
             deadline = time.monotonic() + 8
             poll = 0
+            pacer = None
+            tx_sequence = 0
+            pending_tune = None
+            if tx_enabled:
+                from ft8tx import Pacer
+
+                def tx_job():
+                    job = take_tx()
+                    if job is not None:
+                        samples = array("h", job.pcm)
+                        job.pcm = samples[::3].tobytes()
+                    return job
+
+                def send_pcm(partial):
+                    nonlocal tx_sequence
+                    header = struct.pack(">BBHII", 0x80, 96, tx_sequence, 0, 0x38393000)
+                    audio.sendto(header + partial, (address, audio_port))
+                    tx_sequence = (tx_sequence + 1) & 65535
+
+                pacer = Pacer(
+                    tx_job,
+                    cat.ptt,
+                    send_pcm,
+                    cat.tx_ready,
+                    lambda: cat.ptt_state,
+                    lambda value: on_state("tx_status", value),
+                    16000,
+                )
             on_status("Signing in")
             send("##CN")
             try:
                 while not stop.is_set():
                     now = time.monotonic()
+                    if pacer and cat.authenticated:
+                        pacer.tick()
+                        if pacer.armed:
+                            deadline = now + 6
                     if now >= deadline:
-                        raise ConnectionLost("KNS audio timed out; check UDP audio port and radio settings")
+                        raise ConnectionLost(
+                            "KNS audio timed out; check UDP audio port and radio settings"
+                        )
                     if cat.authenticated and now >= poll:
                         for query in ("FA", "OM0", "NR", "AC", "DD4", "##DD2"):
                             send(query)
-                        poll = now + 0.25
+                        if tx_enabled:
+                            cat.tx_poll()
+                        poll = now + 0.1 if pacer and pacer.armed else now + 0.25
                     if cat.authenticated:
                         for action, value in take_commands():
                             cat.action(action, value)
                         target = take_tune()
-                        if target is not None and 30_000 <= target <= 74_800_000:
-                            send(f"FA{target:011d}")
-                    readable, _, _ = select.select((control, audio), (), (), 0.05)
+                        if target is not None:
+                            pending_tune = target
+                        if (
+                            pending_tune is not None
+                            and 30_000 <= pending_tune <= 74_800_000
+                            and not (cat.ptt_state or cat.ptt_pending)
+                        ):
+                            send(f"FA{pending_tune:011d}")
+                            pending_tune = None
+                    readable, _, _ = select.select(
+                        (control, audio),
+                        (),
+                        (),
+                        0.005 if pacer and pacer.armed else 0.02,
+                    )
                     for source in readable:
                         if source is control:
                             data = control.recv(8192)
@@ -236,13 +423,19 @@ def listen(host, port, username, password, stop, on_status, on_audio,
                             if not parsed:
                                 continue
                             seq, samples = parsed
-                            if last_seq is not None and not 0 < (seq - last_seq) % 65536 < 32768:
+                            if (
+                                last_seq is not None
+                                and not 0 < (seq - last_seq) % 65536 < 32768
+                            ):
                                 continue
                             last_seq = seq
                             deadline = now + 6
                             on_status("Receiving audio")
                             on_audio(pcm.convert(samples))
             finally:
+                if pacer:
+                    with suppress(OSError):
+                        pacer.close()
                 if cat.authenticated:
                     with suppress(OSError):
                         cat.close()

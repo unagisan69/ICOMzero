@@ -27,7 +27,7 @@ Connect the Cardputer to a network that can reach the radio and enable the radio
 For manual installation, download the `.deb` from [GitHub Releases](https://github.com/unagisan69/ICOMzero/releases), then install it on the Cardputer.
 
 ```sh
-sudo apt install ./icomzero_0.5.1-1_arm64.deb
+sudo apt install ./icomzero_0.6.0-1_arm64.deb
 ```
 
 Open **ICOMzero** from APPLaunch after installation.
@@ -46,13 +46,31 @@ The waterfall uses the radio’s scope span and center or fixed-range settings. 
 
 Press **Tab** on the receiver screen to open the keyboard shortcut guide. **Tab** or **Esc** closes it.
 
-## FT8 receive
+## FT8 contacts
 
-Choose **FT8** from the startup menu to connect and decode on **40m, 7.074 MHz USB**. **B** opens FT8 band presets; use **Z/C** and **Enter** to select. **↑/↓** scroll decoded history. **Enter** stops/restarts reception, and **Esc** returns to the menu. The decoder runs locally on the Cardputer; no computer bridge is needed.
+Choose **FT8** from the startup menu. Reception starts silently on **40m, 7.074 MHz USB**. The screen displays eleven smaller decode lines, prefixed with estimated signal reports in dB relative to 2500 Hz. Only CQ calls and messages involving your configured callsign appear. Gold rows indicate your callsign; the outlined row is your selection.
 
-The FT8 screen shows nine decoded message rows with alternating colors. Expect the first results after collecting a complete 15-second period, usually 15–30 seconds after connection. Keep the device clock synchronized with network time. Receiver noise reduction is disabled during FT8 and the prior frequency, mode and NR setting are restored when returning to the menu. Keep receiver noise blanker and notch filters off for best decoding.
+- **F / Fn+F** selects the previous decode; **X / Fn+X** selects the next. Hold to move through history one line at a time. Selection stays on the same decode when new messages arrive.
+- **Enter** answers the highlighted recent CQ or initial addressed call. It does not stop reception.
+- **Tab – Menu** opens Bands, Call CQ, Settings, Stop Transmit, Logging and Help.
+- **Esc** returns to the main menu and stops transmission.
 
-FT8 reception is always silent and does not change the saved Radio volume or mute settings. This release receives and decodes only; FT8 does not transmit, call stations, or run the antenna tuner. FT8 uses USB on every preset, including 40m. Native decoding uses [ft8_lib](https://github.com/kgoba/ft8_lib), with CRC-checked messages; sensitivity is lower than a full WSJT-X decoder, and some hashed callsigns may remain unresolved. No estimated SNR is displayed. The package is built for the Cardputer's ARM64 processor.
+In **Settings**, enter your callsign and Maidenhead grid (four or six characters), choose your CQ period, TX audio frequency and audio level (10–80%, default 50%). Replies use this configured TX audio frequency, independently of the selected station’s receive frequency. Adjust transmit audio for little/no ALC using the radio’s meter. **Call CQ** begins your own CQ sequence; Enter on a selected CQ answers that station. A standard contact exchanges grids and signal reports, uses **RRR** (not RR73) for acknowledgment, and finishes with 73. Incoming RR73 is accepted. Only one explicitly started contact is active at a time; there is no unattended search for additional contacts. Five unanswered repetitions or a three-minute limit stops the sequence without creating a completed contact.
+
+The device must report NTP synchronization before transmission. The menu shows clock health; a reported offset over 250 ms blocks TX. Clock checks repeat during a sequence, and clock jumps, pacing stalls, failed PTT confirmation, disconnects, band changes and Stop Transmit cancel transmission. PTT-off confirmation is required before a transmission counts as completed. Split, RIT and XIT are disabled and read back before TX so the intended VFO frequency is used; their previous settings are restored on a normal exit. Keep the radio's RF power, antenna and transmit audio level configured appropriately; the app uses the radio's existing power setting. Receive-only IC-R8600 cannot transmit. Network transmit paths cover the supported Icom models and TS-890S; physical validation is on IC-7300MK2, and other transmit models still need hardware validation.
+
+Speaker audio stays disabled in FT8. Raw audio reaches the local decoder before volume/mute processing. Reception stays aligned to 15-second periods. An early decode pass near 14 seconds prepares timely replies; a full-period pass can add late signals without duplicating rows. Receiver NR is disabled for FT8; keep noise blanker and notch filters off for best decoding. The app restores prior frequency, mode, NR and transmit modulation settings on a normal exit. It avoids restoring transmit inputs while PTT remains unconfirmed.
+
+### Logging
+
+Completed contacts are saved first to a private local SQLite log with ADIF data. **Logging → Local log** shows completed contacts. Enabled services receive independent queued uploads; offline or rejected uploads stay pending and can be retried with **Sync pending**, automatically once per minute, or at the next launch. An incomplete or cancelled contact is not logged.
+
+- **Wavelog:** set the HTTPS API base URL (including `index.php` if your installation uses it), a read/write key and station profile ID. **Test connections** finds the station matching your callsign/grid when the ID is empty. Uploads use the [Wavelog QSO API](https://docs.wavelog.org/developer/api/#apiqso); Wavelog does not forward API-created QSOs to QRZ, so configure QRZ separately if desired.
+- **QRZ:** enter the logbook API key and enable the service. The [QRZ Logbook API](https://www.qrz.com/docs/logbook/QRZLogbookAPI.html) requires the appropriate subscription for status and insertion. Uploads do not request replacement of existing confirmed contacts.
+
+Connection tests only read station/logbook information and never create test QSOs. Credentials and station identity live in `~/.config/icomzero/ft8.json` with mode 0600; the local log is `qsos.sqlite3` in the same private directory. No credentials or personal station defaults are bundled in the public app.
+
+The decoder/encoder uses [ft8_lib](https://github.com/kgoba/ft8_lib). Reports are spectral SNR estimates, not the synchronization score; real-world values can differ from WSJT-X. Sensitivity is lower than a full WSJT-X decoder, and unresolved hashed/nonstandard calls cannot be selected for automatic replies. This release handles standard FT8 contacts rather than contest, Fox/Hound or multi-stream operation.
 
 ## Build and test
 
@@ -64,7 +82,7 @@ sudo apt install build-essential python3-pil python3-numpy
 make check
 make test
 make package
-sudo apt install ./build/icomzero_0.5.1-1_arm64.deb
+sudo apt install ./build/icomzero_0.6.0-1_arm64.deb
 ```
 
 Use `make package APPBUILDER=/path/to/AppBuilder` for another checkout location. The package includes a foreground APPLaunch entry and declares its Python, Pillow, NumPy, font, ALSA, and PipeWire dependencies.

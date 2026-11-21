@@ -119,6 +119,9 @@ class Receiver:
         self.radio_state = {}
         self.audio_observer = None
         self.play_audio = True
+        self.tx_enabled = False
+        self.tx_job = None
+        self.tx_current = None
 
     def update(self, status):
         if self.status != status:
@@ -157,7 +160,8 @@ class Receiver:
                     self.audio_observer(pcm)
                 if not self.play_audio:
                     self.packets += 1
-                    failures = 0
+                    if self.frequency is not None and "mode" in self.radio_state:
+                        failures = 0
                     self.update("Receiving audio")
                     return
                 now = time.monotonic()
@@ -177,7 +181,8 @@ class Receiver:
                     last_start = now
                 fd = player.stdin.fileno()
                 self.packets += 1
-                failures = 0
+                if self.frequency is not None and "mode" in self.radio_state:
+                    failures = 0
                 volume = 0 if self.muted else self.volume
                 if volume != 100:
                     samples = np.frombuffer(pcm, dtype="<i2").astype(np.int32)
@@ -203,14 +208,18 @@ class Receiver:
                            model=read_config().get("Radio", "Auto (Icom)"),
                            audio_port=(int(read_config().get("Audio port", "60001"))
                                        if read_config().get("Radio") == "TS-890S" else 60001),
-                           admin=read_config().get("Login") == "Admin")
+                           admin=read_config().get("Login") == "Admin",
+                           tx_enabled=self.tx_enabled, take_tx=self.take_tx)
                     break
                 except (ConnectionLost, ConnectionError, TimeoutError):
+                    self.stop_tx()
                     failures += 1
                     if failures > 3:
                         raise RadioError("Radio connection lost; check the network")
                     self.scope = None
                     with self.tune_lock:
+                        self.frequency = self.target = self.tune_queue = None
+                        self.radio_state = {}
                         self.commands.clear()
                     self.update(f"Reconnecting ({failures}/3)")
                     if self.stop.wait(min(2.0, 0.5 * failures)):
@@ -226,6 +235,31 @@ class Receiver:
                 except subprocess.TimeoutExpired:
                     player.kill()
                     player.wait()
+
+    def take_tx(self):
+        with self.tune_lock:
+            job, self.tx_job = self.tx_job, None
+            return job
+
+    def queue_tx(self, pcm, start, dial):
+        from ft8tx import Job
+        if not self.busy() or not self.tx_enabled:
+            raise RadioError("Radio is not ready to transmit")
+        if "ptt" not in self.radio_state or self.radio_state.get("ptt") or self.radio_state.get("ptt_pending"):
+            raise RadioError("Wait for confirmed receive state")
+        job = Job(pcm, start, dial)
+        with self.tune_lock:
+            if self.tx_current is not None and not self.tx_current.done.is_set():
+                raise RadioError("A transmission is already queued")
+            self.tx_current = self.tx_job = job
+        return job
+
+    def stop_tx(self):
+        with self.tune_lock:
+            if self.tx_current is not None:
+                self.tx_current.cancel.set()
+            if self.tx_job is not None:
+                self.tx_job.cancel.set()
 
     def frequency_changed(self, hz):
         with self.tune_lock:
@@ -665,32 +699,64 @@ def home(lcd, keyboard):
                 (ui if choice == 0 else ft8_ui)(lcd, keyboard)
 
 
-def ft8_frame(display, messages, scroll, ready, status, progress, busy):
+def ft8_frame(display, history, callsign, ready, status, progress, transmitting=False):
     image = Image.new("RGB", (WIDTH, HEIGHT), BG)
     draw = ImageDraw.Draw(image)
-    end = max(0, len(messages) - scroll)
-    first = max(0, end - 9)
-    for row, (_, _, text) in enumerate(messages[first:end]):
-        y = row * 16 + 1
-        alternate = (first + row) % 2
-        draw.rectangle((0, y, 319, y + 15), fill=CARD if alternate else BG)
-        draw.text((10, y), text, font=display.fonts["body"],
-                  fill=GREEN if alternate else WHITE)
-    if not messages:
-        draw.text((12, 51), "Listening for FT8" if ready else status[:40],
-                  font=display.fonts["body"], fill=GREEN)
-        draw.text((12, 78), "First messages after a full 15s cycle",
-                  font=display.fonts["small"], fill=MUTED)
+    rows = history.visible(11)
+    for row, message in enumerate(rows):
+        y = row * 13 + 1
+        own = message.involves(callsign)
+        alternate = (history.start + row) % 2
+        background = "#674719" if own else (CARD if alternate else BG)
+        draw.rectangle((0, y, 319, y + 12), fill=background)
+        text = f"{message.snr:+03d} {message.text}"
+        draw.text(
+            (9, y - 1),
+            text,
+            font=display.fonts["small"],
+            fill="#ffe1a1" if own else (GREEN if alternate else WHITE),
+        )
+        if message.key == history.selected:
+            draw.rectangle((0, y, 319, y + 12), outline=GREEN)
+            draw.text((0, y - 1), "›", font=display.fonts["small"], fill=GREEN)
+    if not rows:
+        draw.text(
+            (12, 51),
+            "Waiting for CQ calls" if ready else status[:40],
+            font=display.fonts["body"],
+            fill=GREEN,
+        )
+        draw.text(
+            (12, 78),
+            "CQ calls and your contacts appear here",
+            font=display.fonts["small"],
+            fill=MUTED,
+        )
     draw.rectangle((12, 146, 307, 148), fill=CARD)
     draw.rectangle((12, 146, 12 + int(progress * 295), 148), fill=GREEN)
-    control = "■" if busy else "▶"
-    draw.text((12, 152), f"B band  ↑↓ history  Ent {control}  Esc menu",
-              font=display.fonts["small"], fill=MUTED)
+    draw.text(
+        (231, 152),
+        "Tab - Menu",
+        font=display.fonts["small"],
+        fill="#ff8f8f" if transmitting else MUTED,
+    )
+    if transmitting:
+        draw.rounded_rectangle((8, 151, 54, 168), 3, fill="#8a2424")
+        draw.text((16, 151), "TX", font=display.fonts["small"], fill=WHITE)
     return image
 
 
 def ft8_ui(lcd, keyboard):
-    from ft8 import BANDS, Decoder
+    from ft8 import BANDS, Decoder, History
+    from ft8log import (
+        Logbook,
+        load_settings,
+        save_settings,
+        validate_station,
+        test_service,
+    )
+    from ft8station import Station
+
     display = Display(lcd)
     values = load()
     if not values[0]:
@@ -700,104 +766,471 @@ def ft8_ui(lcd, keyboard):
             return
     rx = Receiver()
     decoder = Decoder()
+    logbook = Logbook()
     rx.audio_observer = decoder.feed
     rx.play_audio = False
+    rx.tx_enabled = True
+    station = Station(rx, decoder, logbook)
+    settings = load_settings()
+    history = History()
     dial = 7074000
     band = None
-    configured = False
-    ready = False
+    configured = ready = False
     previous = None
+    panel = None
+    choice = 0
+    editing = False
+    original = ""
+    shift = set()
     fn = False
-    scroll = 0
+    toast = ""
+    toast_until = 0
     last_frame = 0
+    last_station_status = "Receive only"
+    held = None
+    next_repeat = 0
+    menu_items = [
+        "Bands",
+        "Call CQ",
+        "Settings",
+        "Stop Transmit",
+        "Logging",
+        "Help",
+        "Back",
+    ]
+    log_items = [
+        "Wavelog",
+        "QRZ",
+        "Test connections",
+        "Sync pending",
+        "Local log",
+        "Back",
+    ]
+    fields = {
+        "station": [
+            ("Call sign", "callsign"),
+            ("Grid / region", "grid"),
+            ("TX audio Hz", "tx_hz"),
+            ("TX level %", "tx_level"),
+            ("CQ period", "cq_period"),
+        ],
+        "wavelog": [
+            ("API URL", "wavelog_url"),
+            ("API key", "wavelog_key"),
+            ("Station ID", "wavelog_station"),
+            ("Enabled", "wavelog_enabled"),
+        ],
+        "qrz": [("API key", "qrz_key"), ("Enabled", "qrz_enabled")],
+    }
+
+    def notify(message):
+        nonlocal toast, toast_until
+        toast = str(message)
+        toast_until = time.monotonic() + 3
+
+    def stop_tx():
+        station.action("stop")
 
     def restore_radio():
-        if previous and rx.busy() and not rx.stop.is_set():
+        if (
+            previous
+            and rx.busy()
+            and not rx.stop.is_set()
+            and not rx.radio_state.get("ptt", False)
+            and not rx.radio_state.get("ptt_pending", False)
+        ):
             rx.tune(previous[0])
             rx.command("mode", previous[1])
             if previous[2] is not None and previous[2] != rx.radio_state.get("nr"):
                 rx.command("nr")
-            time.sleep(.25)
+            time.sleep(0.25)
+
+    def show_panel(name):
+        nonlocal panel, choice, editing, held
+        panel = name
+        choice = 0
+        editing = False
+        held = None
+
+    def test_logging():
+        results = []
+        current = dict(settings)
+        for service in ("wavelog", "qrz"):
+            if not current[service + "_enabled"]:
+                continue
+            try:
+                result = test_service(service, current)
+                if service == "wavelog":
+                    settings["wavelog_station"] = result.split()[-1]
+                    save_settings(settings)
+                results.append(service.title() + " OK")
+            except Exception as error:
+                results.append(service.title() + ": " + type(error).__name__)
+        logbook.status = " · ".join(results) or "Enable a logging service first"
 
     try:
         rx.start(connection(values))
         while True:
             now = time.monotonic()
+            if station.status != last_station_status:
+                last_station_status = station.status
+                if not station.active and station.status not in (
+                    "Receive only",
+                    "Transmit stopped",
+                ):
+                    notify(station.status)
             profile = rx.radio_state.get("profile", DEFAULT_PROFILE)
-            bands = [(name, hz) for name, hz in BANDS
-                     if any(low <= hz <= high for _, low, high in profile["bands"])]
-            if rx.frequency is not None and "mode" in rx.radio_state and (not profile["nr"] or "nr" in rx.radio_state) and not configured:
+            bands = [
+                (name, hz)
+                for name, hz in BANDS
+                if any(low <= hz <= high for _, low, high in profile["bands"])
+            ]
+            if (
+                rx.frequency is not None
+                and "mode" in rx.radio_state
+                and (not profile["nr"] or "nr" in rx.radio_state)
+                and not configured
+            ):
                 if bands and not any(hz == dial for _, hz in bands):
                     dial = bands[0][1]
                 if previous is None:
-                    previous = (rx.frequency, rx.radio_state["mode"], rx.radio_state.get("nr"))
+                    previous = (
+                        rx.frequency,
+                        rx.radio_state["mode"],
+                        rx.radio_state.get("nr"),
+                    )
                 rx.tune(dial)
                 rx.command("mode", 1)
                 if rx.radio_state.get("nr"):
                     rx.command("nr")
                 configured = True
-            receiving = configured and rx.busy() and rx.frequency == dial and rx.radio_state.get("mode") == 1
-            if receiving != ready:
-                decoder.activate(receiving)
-                ready = receiving
+            receiving = (
+                configured
+                and rx.busy()
+                and rx.frequency == dial
+                and rx.radio_state.get("mode") == 1
+                and not rx.radio_state.get("ptt", False)
+            )
+            # Do not reset the decoder at each TX/RX transition: audio gap recovery
+            # discards partial periods automatically, preserving decoded history.
+            if not ready and receiving:
+                decoder.activate()
+                ready = True
+            if ready and not rx.busy():
+                decoder.activate(False)
+                ready = False
             messages, status, progress = decoder.snapshot()
-            if now - last_frame >= .1:
+            history.update(messages, settings["callsign"])
+            if (
+                held is not None
+                and now >= next_repeat
+                and panel is None
+                and band is None
+            ):
+                history.move(held)
+                next_repeat = now + 0.12
+            if now - last_frame >= 0.08:
                 if band is not None:
-                    image, draw = menu_frame(display, "Select FT8 band", "USB · speaker silent")
+                    image, draw = menu_frame(
+                        display, "Select FT8 band", f"{dial/1e6:.3f} MHz · USB"
+                    )
                     for i, (label, hz) in enumerate(bands):
                         x, y = 12 + i % 3 * 102, 39 + i // 3 * 25
-                        draw.rounded_rectangle((x, y, x + 94, y + 22), 4, fill=CARD, outline=GREEN if i == band else CARD)
-                        draw.text((x + 8, y + 3), label, font=display.fonts["small"], fill=WHITE)
-                    draw.text((12, 151), "Z / C choose   Ent tune   Esc back", font=display.fonts["small"], fill=MUTED)
+                        draw.rounded_rectangle(
+                            (x, y, x + 94, y + 22),
+                            4,
+                            fill=CARD,
+                            outline=GREEN if i == band else CARD,
+                        )
+                        draw.text(
+                            (x + 8, y + 3),
+                            label,
+                            font=display.fonts["small"],
+                            fill=WHITE,
+                        )
+                elif panel is not None:
+                    title = {
+                        "menu": "FT8 Menu",
+                        "logging": "Logging",
+                        "station": "Station settings",
+                        "wavelog": "Wavelog",
+                        "qrz": "QRZ",
+                        "local": "Local contacts",
+                        "help": "FT8 shortcuts",
+                    }[panel]
+                    subtitle = (
+                        station.clock_status
+                        if panel == "menu"
+                        else (
+                            logbook.status
+                            if panel in ("logging", "local")
+                            else "Enter edit · Esc back"
+                        )
+                    )
+                    image, draw = menu_frame(display, title, subtitle[:43])
+                    if panel in ("menu", "logging"):
+                        items = menu_items if panel == "menu" else log_items
+                    elif panel == "help":
+                        items = [
+                            "F / Fn+F: previous decode",
+                            "X / Fn+X: next decode",
+                            "Enter: answer selected CQ",
+                            "Gold rows: your callsign",
+                            "Call CQ: start your own CQ",
+                            "Esc / Stop Transmit: stop TX",
+                        ]
+                    elif panel == "local":
+                        items = [
+                            f"{time.strftime('%m/%d %H:%M',time.gmtime(q['end']))} {q['call']} {q['band']}"
+                            for q in logbook.recent()
+                        ] or ["No completed contacts"]
+                    else:
+                        items = []
+                        for label, key in fields[panel]:
+                            value = settings[key]
+                            if isinstance(value, bool):
+                                value = "On" if value else "Off"
+                            elif key.endswith("_key"):
+                                value = "•" * min(16, len(str(value))) or "(not set)"
+                            else:
+                                value = str(value)[-23:] or "(not set)"
+                            items.append(
+                                label
+                                + ": "
+                                + value
+                                + (
+                                    "▏"
+                                    if editing and fields[panel][choice][1] == key
+                                    else ""
+                                )
+                            )
+                    first = max(0, min(choice - 4, len(items) - 6))
+                    for row, index in enumerate(
+                        range(first, min(first + 6, len(items)))
+                    ):
+                        y = 52 + row * 16
+                        if index == choice:
+                            draw.rounded_rectangle(
+                                (8, y, 312, y + 16), 3, fill=CARD, outline=GREEN
+                            )
+                        draw.text(
+                            (14, y),
+                            items[index][:45],
+                            font=display.fonts["small"],
+                            fill=GREEN if index == choice else WHITE,
+                        )
+                    bottom = (
+                        (toast if now < toast_until else station.status)
+                        if panel == "menu"
+                        else (
+                            " · ".join(logbook.summary())
+                            if panel == "logging"
+                            else "F / X select · Enter · Tab / Esc back"
+                        )
+                    )
+                    draw.text(
+                        (12, 152),
+                        (toast if now < toast_until else bottom)[:43],
+                        font=display.fonts["small"],
+                        fill=MUTED,
+                    )
                 else:
-                    image = ft8_frame(display, messages, scroll, ready, rx.status,
-                                      progress, rx.busy())
+                    image = ft8_frame(
+                        display,
+                        history,
+                        settings["callsign"],
+                        ready,
+                        rx.status,
+                        progress,
+                        rx.radio_state.get("ptt", False),
+                    )
+                    if now < toast_until:
+                        draw = ImageDraw.Draw(image)
+                        draw.rectangle((0, 0, 319, 17), fill=CARD)
+                        draw.text(
+                            (8, 1), toast[:43], font=display.fonts["small"], fill=GREEN
+                        )
                 display.present(image)
                 last_frame = now
-            for key, pressed in keys_ready(keyboard):
+            for key, pressed in keys_ready(keyboard, 0.01):
                 if key in (KEY_FN, KEY_CARDPUTER_FN):
                     fn = bool(pressed)
                     continue
+                if key in (42, 54):
+                    (shift.add if pressed else shift.discard)(key)
+                    continue
                 if not pressed:
+                    if key in (33, 45, 103, 108, 482):
+                        held = None
                     continue
-                if fn or key in (KEY_FN_S, KEY_FN_D, KEY_VOLUME_DOWN, KEY_VOLUME_UP, 113):
+                if editing:
+                    label, field = fields[panel][choice]
+                    if key == 1:
+                        settings[field] = original
+                        editing = False
+                    elif key == 28 and pressed == 1:
+                        try:
+                            if panel == "station":
+                                settings["callsign"] = settings["callsign"].upper()
+                                settings["grid"] = settings["grid"].upper()
+                                validate_station(
+                                    {
+                                        **settings,
+                                        "callsign": settings["callsign"] or "K1ABC",
+                                        "grid": settings["grid"] or "FN42",
+                                    }
+                                )
+                            if (
+                                panel == "wavelog"
+                                and settings["wavelog_url"]
+                                and not settings["wavelog_url"].startswith("https://")
+                            ):
+                                raise ValueError("API URL must use HTTPS")
+                            save_settings(settings)
+                            editing = False
+                        except ValueError as error:
+                            notify(error)
+                    elif key == 14:
+                        settings[field] = settings[field][:-1]
+                    elif key in KEYS:
+                        char = KEYS[key]
+                        char = SHIFTED.get(char, char.upper()) if shift else char
+                        if len(settings[field]) < 256:
+                            settings[field] += char
                     continue
-                if pressed == 1:
-                    if band is not None:
-                        if key == 1:
-                            band = None
-                        elif key in (44, 46, 105, 106):
-                            band = (band + (-1 if key in (44, 105) else 1)) % len(bands)
-                        elif key == 28:
-                            dial = bands[band][1]
-                            decoder.activate(False, clear=True)
-                            ready = False
-                            rx.tune(dial)
-                            rx.command("mode", 1)
-                            band = None
-                            scroll = 0
-                    elif key == 1:
-                        return
-                    elif key == 48 and bands:
-                        band = min(range(len(bands)), key=lambda i: abs(bands[i][1] - dial))
-                    elif key in (103, 108):
-                        scroll = max(0, min(max(0, len(messages) - 9), scroll + (1 if key == 103 else -1)))
-                    elif key == 28:
-                        decoder.activate(False)
+                direction = (
+                    -1
+                    if key in (33, 103, 44, 105, 482)
+                    else (1 if key in (45, 108, 46, 106) else 0)
+                )
+                if band is not None:
+                    if key in (1, 15):
+                        band = None
+                    elif direction:
+                        band = (band + direction) % len(bands)
+                    elif key == 28 and pressed == 1:
+                        stop_tx()
+                        dial = bands[band][1]
+                        decoder.activate(False, clear=True)
                         ready = False
-                        if rx.busy():
-                            restore_radio()
-                            rx.stop.set()
+                        history = History()
+                        rx.tune(dial)
+                        rx.command("mode", 1)
+                        band = None
+                    continue
+                if panel is not None:
+                    if key in (1, 15):
+                        if panel == "menu":
+                            panel = None
+                        elif panel == "logging":
+                            show_panel("menu")
+                        elif panel in ("wavelog", "qrz", "local"):
+                            show_panel("logging")
                         else:
-                            configured = False
-                            rx.start(connection(values))
+                            show_panel("menu")
+                    elif direction:
+                        count = (
+                            len(menu_items)
+                            if panel == "menu"
+                            else (
+                                len(log_items)
+                                if panel == "logging"
+                                else (
+                                    max(1, len(logbook.recent()))
+                                    if panel == "local"
+                                    else 6 if panel == "help" else len(fields[panel])
+                                )
+                            )
+                        )
+                        choice = (choice + direction) % count
+                    elif key == 28 and pressed == 1:
+                        if panel == "menu":
+                            action = menu_items[choice]
+                            if action == "Bands":
+                                stop_tx()
+                                band = min(
+                                    range(len(bands)),
+                                    key=lambda i: abs(bands[i][1] - dial),
+                                )
+                                panel = None
+                            elif action == "Call CQ":
+                                station.action("cq", dial=dial)
+                                panel = None
+                                notify("Calling CQ on next transmit period")
+                            elif action == "Settings":
+                                stop_tx()
+                                show_panel("station")
+                            elif action == "Stop Transmit":
+                                stop_tx()
+                                notify("Transmit stopped")
+                                panel = None
+                            elif action == "Logging":
+                                show_panel("logging")
+                            elif action == "Help":
+                                show_panel("help")
+                            else:
+                                panel = None
+                        elif panel == "logging":
+                            action = log_items[choice]
+                            if action in ("Wavelog", "QRZ"):
+                                show_panel(action.lower())
+                            elif action == "Test connections":
+                                logbook.status = "Checking connections"
+                                threading.Thread(
+                                    target=test_logging, daemon=True
+                                ).start()
+                            elif action == "Sync pending":
+                                logbook.sync()
+                            elif action == "Local log":
+                                show_panel("local")
+                            else:
+                                show_panel("menu")
+                        elif panel in fields:
+                            field = fields[panel][choice][1]
+                            if isinstance(settings[field], bool):
+                                settings[field] = not settings[field]
+                                save_settings(settings)
+                            elif field == "cq_period":
+                                settings[field] = (
+                                    "Odd" if settings[field] == "Even" else "Even"
+                                )
+                                save_settings(settings)
+                            else:
+                                original = settings[field]
+                                editing = True
+                    continue
+                if key == 15 and pressed == 1:
+                    show_panel("menu")
+                elif direction:
+                    history.move(direction)
+                    if pressed == 1:
+                        held = direction
+                        next_repeat = now + 0.35
+                elif key == 1 and pressed == 1:
+                    return
+                elif key == 28 and pressed == 1:
+                    message = history.current()
+                    if message is None:
+                        notify("Select a decode with F / X")
+                    else:
+                        station.action("reply", message, dial)
+                        notify("Answering " + message.text)
+                # B is retained as a convenience, with all band changes cancelling TX.
+                elif key == 48 and pressed == 1 and bands:
+                    stop_tx()
+                    band = min(range(len(bands)), key=lambda i: abs(bands[i][1] - dial))
     finally:
+        station.close()
+        rx.stop_tx()
         decoder.activate(False)
+        # Give the transport's repeated PTT-off path time before restoring tuning.
+        time.sleep(0.45)
         restore_radio()
         rx.stop.set()
         if rx.thread:
-            rx.thread.join(timeout=2)
+            rx.thread.join(timeout=3)
         decoder.close()
+        logbook.close()
 
 
 def main():
