@@ -123,7 +123,7 @@ class Pacer:
             if wall > job.start + 0.15:
                 self.end(False, "Missed transmit period", wall, mono)
                 return
-            if wall < job.start - 0.15:
+            if wall < job.start - 0.5:
                 return
             self.ptt(True)
             self.armed = True
@@ -132,7 +132,9 @@ class Pacer:
         if wall < job.start:
             return
         if not self.keyed():
-            if wall > job.start + 0.15:
+            if job.started.is_set():
+                self.end(False, "Radio returned to RX during TX", wall, mono)
+            elif wall > job.start + 0.15:
                 self.end(False, "PTT not confirmed", wall, mono)
             return
         # Never send an accumulated burst after a CPU stall.

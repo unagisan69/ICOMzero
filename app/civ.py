@@ -132,6 +132,8 @@ class Civ:
         self.ptt_state = False
         self.ptt_wanted = None
         self.ptt_pending = False
+        self.ptt_expected = None
+        self.ptt_query_at = 0
         self.tx_poll = 0
         self.meter_poll = 0
         self.nr = None
@@ -239,6 +241,9 @@ class Civ:
                 self.fault_applied = False
                 self.clear_requested = None
                 self.on_state("fault_clear_status", "Warning cleared")
+        if self.ptt_pending and now >= self.ptt_query_at:
+            self.schedule(b"\x1c\x00", urgent=True)
+            self.ptt_query_at = now + 0.05
         if not self.open and now >= self.next_open:
             self.open_close(4)
             self.schedule(b"\x03", urgent=True)
@@ -411,8 +416,11 @@ class Civ:
             self.ptt_wanted = None
             self.send(bytes((0x1C, 0, int(enabled))))
             self.ptt_pending = True
+            self.ptt_expected = enabled
+            self.ptt_query_at = now + 0.05
             self.on_state("ptt_pending", True)
             if enabled:
+                self.on_state("ptt_on_sent_at", time.monotonic())
                 self.protection.begin()
                 self.meter_poll = 0
                 # Never replay an expired PTT-on in response to a late repair.
@@ -421,7 +429,10 @@ class Civ:
             self.next_command = now + 0.025
             return
         # Coalesce tuning to the latest target, ahead of routine state polls.
-        if (
+        if b"\x1c\x01\x00" in self.pending:
+            self.pending.remove(b"\x1c\x01\x00")
+            self.send(b"\x1c\x01\x00")
+        elif (
             self.tune_target is not None
             and now >= self.retry_tune
             and not (
@@ -525,8 +536,12 @@ class Civ:
                     and self.ptt_state
                 ):
                     self.tune_seen_active = True
-                self.ptt_pending = False
-                self.on_state("ptt_pending", False)
+                if self.ptt_expected is None or self.ptt_state == self.ptt_expected:
+                    self.ptt_pending = False
+                elif self.ptt_pending:
+                    self.ptt_query_at = 0
+                self.on_state("ptt_readback_at", self.ptt_at)
+                self.on_state("ptt_pending", self.ptt_pending)
                 self.on_state("ptt", self.ptt_state)
             elif (
                 len(command) == 3
@@ -600,6 +615,7 @@ class Civ:
                 deadline = time.monotonic() + 0.4
                 retry = 0
                 self.ptt_pending = True
+                self.ptt_expected = False
                 while time.monotonic() < deadline:
                     now = time.monotonic()
                     if now >= retry:

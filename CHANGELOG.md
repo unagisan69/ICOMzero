@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.4 — 2026-11-21
+
+- Prepare FT8 waveforms before the transmit slot and queue frames within its first 200 ms. Request PTT up to 500 ms before the unchanged UTC slot +0.5-second audio start.
+- Require PTT readback to match the requested TX/RX state and poll pending confirmation every 50 ms. Keep tuner-stop commands ahead of confirmation polls.
+- Retain confirmed-TX gating and late/stalled-frame cancellation; distinguish a return to RX during a frame from initial PTT confirmation failure.
+- Include PTT timing and audio-start state in private failure diagnostics.
+
 ## 0.7.3 — 2026-11-21
 
 - Allow a bounded three-second meter pause during internal antenna tuning; retain the 1.2-second missing-telemetry deadline for FT8 frames.

@@ -27,7 +27,7 @@ Connect the Cardputer to a network that can reach the radio and enable the radio
 For manual installation, download the `.deb` from [GitHub Releases](https://github.com/unagisan69/ICOMzero/releases), then install it on the Cardputer.
 
 ```sh
-sudo apt install ./icomzero_0.7.3-1_arm64.deb
+sudo apt install ./icomzero_0.7.4-1_arm64.deb
 ```
 
 Open **ICOMzero** from APPLaunch after installation.
@@ -57,7 +57,7 @@ Choose **FT8** from the startup menu. Reception starts silently on **40m, 7.074 
 
 In **Settings**, enter your callsign and Maidenhead grid (four or six characters), choose your CQ period, TX audio frequency audio level (10–80%, default 50%), and nominal RF power in watts (default 10 W; TS-890S minimum 5 W). Replies use this configured TX audio frequency, independently of the selected station’s receive frequency. Adjust transmit audio for little/no ALC using the radio’s meter. **Call CQ** begins your own CQ sequence; Enter on a selected CQ answers that station. A standard contact exchanges grids and signal reports, uses **RRR** (not RR73) for acknowledgment, and finishes with 73. Incoming RR73 is accepted. Only one explicitly started contact is active at a time; there is no unattended search for additional contacts. Five unanswered repetitions or a three-minute limit stops the sequence without creating a completed contact.
 
-The device must report NTP synchronization before transmission. The menu shows clock health; a reported offset over 250 ms blocks TX. Clock checks repeat during a sequence, and clock jumps, pacing stalls, failed PTT confirmation, disconnects, band changes and Stop Transmit cancel transmission. PTT-off confirmation is required before a transmission counts as completed. Split, RIT and XIT are disabled and read back before TX so the intended VFO frequency is used; their previous settings are restored on a normal exit. RF power is applied and read back before tuning or FT8 TX. Icom power settings use a nominal fraction of the model’s rated power; actual watts depend on band and hardware limits. The live RF meter reports calibrated output, and the prior power control is restored on normal exit. Receive-only IC-R8600 cannot transmit. Network transmit paths cover the supported Icom models and TS-890S; physical validation is on IC-7300MK2, and other transmit models still need hardware validation.
+The device must report NTP synchronization before transmission. The menu shows clock health; a reported offset over 250 ms blocks TX. Clock checks repeat during a sequence, and clock jumps, pacing stalls, failed PTT confirmation, disconnects, band changes and Stop Transmit cancel transmission. Waveforms are prepared before the slot. PTT is requested up to 500 ms before the fixed audio start at UTC slot +0.5 seconds; frames are queued only in the first 200 ms of their chosen slot. Audio waits for confirmed TX. PTT readbacks must match the requested state, and a pending state is queried every 50 ms. PTT-off confirmation is required before a transmission counts as completed. Split, RIT and XIT are disabled and read back before TX so the intended VFO frequency is used; their previous settings are restored on a normal exit. RF power is applied and read back before tuning or FT8 TX. Icom power settings use a nominal fraction of the model’s rated power; actual watts depend on band and hardware limits. The live RF meter reports calibrated output, and the prior power control is restored on normal exit. Receive-only IC-R8600 cannot transmit. Network transmit paths cover the supported Icom models and TS-890S; physical validation is on IC-7300MK2, and other transmit models still need hardware validation.
 
 **Automatic antenna tuning briefly transmits a carrier** when FT8 opens and after each band change, on models with a supported tuner. It waits for band and power confirmation; Call CQ/reply waits for tuning to finish. Stop Transmit cancels active tuning but preserves an already completed tuner match. Opening Settings also preserves that match. The main menu no longer displays the tagline.
 
@@ -88,7 +88,7 @@ sudo apt install build-essential python3-pil python3-numpy
 make check
 make test
 make package
-sudo apt install ./build/icomzero_0.7.3-1_arm64.deb
+sudo apt install ./build/icomzero_0.7.4-1_arm64.deb
 ```
 
 Use `make package APPBUILDER=/path/to/AppBuilder` for another checkout location. The package includes a foreground APPLaunch entry and declares its Python, Pillow, NumPy, font, ALSA, and PipeWire dependencies.

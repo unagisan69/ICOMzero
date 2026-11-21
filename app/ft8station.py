@@ -46,7 +46,7 @@ def clock_synced():
     return clock_health()[0]
 
 
-def record_fault(receiver, reason):
+def record_fault(receiver, reason, job=None):
     """Private, bounded diagnostics; never store credentials or decoded traffic."""
     try:
         state = receiver.radio_state
@@ -61,6 +61,15 @@ def record_fault(receiver, reason):
             "ptt_pending": state.get("ptt_pending"),
             "tuner": state.get("tuner"),
         }
+        current = job if job is not None else receiver.tx_current
+        data["audio_started"] = bool(
+            current
+            and current.started.is_set()
+            and (job is not None or not current.done.is_set())
+        )
+        for name in ("ptt_on_sent", "ptt_readback"):
+            stamp = state.get(name + "_at")
+            data[name + "_age_s"] = round(now - stamp, 3) if stamp is not None else None
         for name in ("swr", "alc", "watts"):
             data[name] = state.get(name)
             stamp = state.get(name + "_at")
@@ -289,8 +298,29 @@ class Station:
                     self.sequence.transmitted(pending, job.success)
                     if not job.success:
                         self.sequence.status = job.error or "Transmit stopped"
+                        record_fault(self.receiver, self.sequence.status, job)
                     job = pending = None
-                if self.receiver.radio_state.get("tx_ready") and job is None:
+                # Encode during RX, not after entering the small key-up window.
+                if self.sequence.enabled:
+                    key = (
+                        self.sequence.message,
+                        self.sequence.hz,
+                        48000,
+                        int(self.sequence.settings.get("tx_level", "50")),
+                    )
+                    if key not in cache:
+                        try:
+                            cache[key] = waveform(*key)
+                            if len(cache) > 12:
+                                cache = {key: cache[key]}
+                        except Exception as error:
+                            self.receiver.stop_tx()
+                            self.sequence.stop("Encoder error: " + type(error).__name__)
+                if (
+                    self.sequence.enabled
+                    and self.receiver.radio_state.get("tx_ready")
+                    and job is None
+                ):
                     previous_decoded = self.decoder.last_decoded_slot
                     phase_ready = (
                         previous_decoded == int(time.time() // 15) - 1
@@ -305,10 +335,6 @@ class Station:
                                 48000,
                                 int(self.sequence.settings.get("tx_level", "50")),
                             )
-                            if key not in cache:
-                                cache[key] = waveform(*key)
-                                if len(cache) > 12:
-                                    cache = {key: cache[key]}
                             if version != self.version or self.closed.is_set():
                                 continue
                             job = self.receiver.queue_tx(

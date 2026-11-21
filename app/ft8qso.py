@@ -197,7 +197,7 @@ class Sequencer:
         slot = int(now // 15)
         # Prebuild before the chosen period; never start late into an existing period.
         target = slot
-        if target % 2 != self.parity or not 0.25 <= now - slot * 15 <= 0.65:
+        if target % 2 != self.parity or not 0 <= now - slot * 15 <= 0.2:
             return None
         if self.last_slot is not None and target <= self.last_slot:
             return None

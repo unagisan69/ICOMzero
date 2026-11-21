@@ -202,10 +202,10 @@ class Contacts(unittest.TestCase):
 
     def test_queue_uses_opposite_period_and_never_starts_mid_period(self):
         self.start_reply()
-        self.assertIsNone(self.seq.next(1500.1))
-        self.assertIsNone(self.seq.next(1515.3))
+        self.assertIsNone(self.seq.next(1500.3))
+        self.assertIsNone(self.seq.next(1515.1))
         self.assertIsNone(self.seq.next(1503))
-        pending = self.seq.next(1500.3)
+        pending = self.seq.next(1500.1)
         self.assertEqual(pending[3], 100)
 
 
