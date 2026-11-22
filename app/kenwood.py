@@ -435,6 +435,7 @@ def listen(
     admin,
     tx_enabled=False,
     take_tx=lambda: None,
+    on_audio_gap=lambda: None,
 ):
     for value in (username, password):
         if not 1 <= len(value) <= 99 or any(
@@ -569,6 +570,8 @@ def listen(
                                 and not 0 < (seq - last_seq) % 65536 < 32768
                             ):
                                 continue
+                            if last_seq is not None and (seq - last_seq) % 65536 != 1:
+                                on_audio_gap()
                             last_seq = seq
                             deadline = now + 6
                             on_status("Receiving audio")

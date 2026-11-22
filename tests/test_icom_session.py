@@ -19,6 +19,7 @@ class StreamNegotiation(unittest.TestCase):
         recover_civ=False,
         repair_range=False,
         refusals=1,
+        audio_gap=False,
     ):
         stop = threading.Event()
         errors, statuses, frames, state, requests = [], [], [], {}, []
@@ -32,7 +33,8 @@ class StreamNegotiation(unittest.TestCase):
         ready = set()
         ready_after = 0
         audio_at = 0
-        pcm_seq = 0
+        pcm_seq = 65535 if audio_gap else 0
+        audio_events = []
         audio_idles = []
         suspended = reopened = False
         open_count = 0
@@ -181,7 +183,9 @@ class StreamNegotiation(unittest.TestCase):
                                 + pcm
                             )
                             reply(audio, addr, local, 0, body)
-                            pcm_seq += 1
+                            pcm_seq = (
+                                pcm_seq + (2 if audio_gap and pcm_seq == 65535 else 1)
+                            ) % 65536
                             audio_at = time.monotonic() + 0.02
             except Exception as error:
                 errors.append(error)
@@ -193,6 +197,9 @@ class StreamNegotiation(unittest.TestCase):
         def sample(pcm):
             nonlocal suspended, inject_range
             frames.append(pcm)
+            audio_events.append("audio")
+            if audio_gap and len(frames) < 3:
+                return
             if state.get("frequency") and "mode" in state:
                 if repair_range:
                     if repair_complete:
@@ -219,6 +226,7 @@ class StreamNegotiation(unittest.TestCase):
                 lambda v: state.update(frequency=v),
                 on_state=state.__setitem__,
                 tx_enabled=tx_enabled,
+                on_audio_gap=lambda: audio_events.append("gap"),
             )
         finally:
             stop.set()
@@ -227,6 +235,9 @@ class StreamNegotiation(unittest.TestCase):
                 sock.close()
         self.assertFalse(errors, errors)
         self.assertTrue(frames)
+        if audio_gap:
+            self.assertEqual(audio_events.count("gap"), 1)
+            self.assertEqual(audio_events[:3], ["audio", "gap", "audio"])
         self.assertEqual(
             audio_idles, [], "Audio transport injected tracked empty packets"
         )
@@ -241,6 +252,9 @@ class StreamNegotiation(unittest.TestCase):
             self.assertGreaterEqual(open_count, 2)
             self.assertIsNotNone(state.get("civ_recovered_at"))
             self.assertFalse(state["civ_recovering"])
+
+    def test_missing_audio_sequence_resyncs_before_pcm_including_wraparound(self):
+        self.run_radio(0, audio_gap=True)
 
     def test_zero_port_busy_reply_retries_fresh_transaction(self):
         self.run_radio(0)

@@ -4,7 +4,7 @@ import time
 import unittest
 from unittest.mock import patch
 import numpy as np
-from cw import Core, Decoder
+from cw import Core, Decoder, Scrollback
 
 # Independent timing fixture for a short conventional CQ/report message.
 CODE = {
@@ -64,6 +64,8 @@ def hand_recording(
     jitter=0.0,
     hz=600,
     seed=41,
+    letter_units=3,
+    word_units=7,
 ):
     rng = np.random.default_rng(seed)
     rate = 48000
@@ -80,7 +82,7 @@ def hand_recording(
 
     for wi, word in enumerate(text.split()):
         if wi:
-            silence(4)
+            silence(word_units - letter_units)
         for letter in word:
             for index, symbol in enumerate(CODE[letter]):
                 if index:
@@ -98,7 +100,7 @@ def hand_recording(
                 parts.append(
                     0.35 * np.sin(2 * np.pi * hz * np.arange(n) / rate) * envelope
                 )
-            silence(3)
+            silence(letter_units)
     parts.append(np.zeros(round(1.7 * rate)))
     x = np.concatenate(parts)
     x += rng.normal(0, 0.015, len(x))
@@ -183,6 +185,10 @@ class CW(unittest.TestCase):
                     "CQ TEST K1ABC 599",
                 )
 
+    def test_stretched_letter_spacing_preserves_words_and_callsign(self):
+        pcm = hand_recording(letter_units=6, word_units=14, jitter=0.04)
+        self.assertEqual(self.decode(pcm)["text"].strip(), "CQ TEST K1ABC 599")
+
     def test_fading_does_not_split_dashes_or_erase_dots(self):
         x = np.frombuffer(recording(hz=600), dtype="<i2").astype(float) / 32768
         # About 18 dB of fading, independently of the keying pattern.
@@ -209,7 +215,7 @@ class CW(unittest.TestCase):
             + bytes(48000 * 2 * 3)
             + recording(wpm=30, hz=1200)
         )
-        self.assertEqual(state["text"].strip(), "CQ TEST K1ABC 599 CQ TEST K1ABC 599")
+        self.assertEqual(state["text"].strip(), "CQ TEST K1ABC 599\nCQ TEST K1ABC 599")
         self.assertLess(abs(state["wpm"] - 30), 4)
 
     def test_receiver_noise_after_a_station_stops_adds_no_text(self):
@@ -264,17 +270,102 @@ class CW(unittest.TestCase):
         finally:
             decoder.close()
 
+    def test_short_network_burst_does_not_overrun_audio_queue(self):
+        with patch("cw.threading.Thread.start"):
+            decoder = Decoder()
+            decoder.configure(True, 1)
+            for _ in range(24):
+                decoder.feed(bytes(960))
+            self.assertEqual(decoder.dropped, 0)
+            self.assertEqual(decoder.jobs.qsize(), 24)
+        decoder.stop.set()
+
+    def test_late_contiguous_audio_keeps_timing_and_actual_gap_resets_it(self):
+        class Probe:
+            def __init__(self, rate=48000, text="", tone=None, offset=0):
+                self.text = text
+                self.timing = self
+
+            def feed(self, pcm):
+                self.text += pcm.decode()
+
+            def snapshot(self):
+                return {"text": self.text}
+
+        def wait_for(decoder, text):
+            end = time.monotonic() + 2
+            while time.monotonic() < end:
+                if decoder.snapshot()["text"] == text:
+                    return
+                time.sleep(0.005)
+            self.fail(decoder.snapshot())
+
+        with patch("cw.Core", Probe):
+            decoder = Decoder()
+            decoder.configure(True, 1)
+            try:
+                decoder.feed(b"first")
+                wait_for(decoder, "first")
+                # The captured radio stream had 184 ms of jitter with no missing sequence.
+                time.sleep(0.2)
+                decoder.feed(b"second")
+                wait_for(decoder, "firstsecond")
+                decoder.discontinuity()
+                decoder.feed(b"next")
+                wait_for(decoder, "firstsecond\nnext")
+            finally:
+                decoder.close()
+
     def test_audio_overrun_invalidates_queued_morse_timing(self):
         with patch("cw.threading.Thread.start"):
             decoder = Decoder()
             decoder.configure(True, 1)
             generation = decoder.generation
-            for _ in range(17):
+            for _ in range(65):
                 decoder.feed(bytes(960))
             self.assertGreater(decoder.generation, generation)
             self.assertEqual(decoder.dropped, 1)
-            self.assertLessEqual(decoder.jobs.qsize(), 16)
+            self.assertLessEqual(decoder.jobs.qsize(), 64)
         decoder.stop.set()
+
+
+class CWScrollback(unittest.TestCase):
+    def test_scroll_stays_put_and_bottom_reenables_follow(self):
+        history = Scrollback(columns=5, rows=2)
+        text = "one two three four five six"
+        history.update(text, 1)
+        self.assertFalse(history.view()["browsing"])
+        history.scroll(-1)
+        old = history.view()["lines"]
+        history.update(text + " seven eight", 1)
+        self.assertEqual(history.view()["lines"], old)
+        for _ in range(20):
+            history.scroll(1)
+        self.assertFalse(history.view()["browsing"])
+        history.update(text + " seven eight nine", 1)
+        self.assertTrue(history.view()["lines"][-1].endswith("nine▏"))
+
+    def test_resync_adds_line_break_instead_of_clearing(self):
+        history = Scrollback(columns=30, rows=3)
+        history.update("OLD MESSAGE", 1)
+        history.update("NEW MESSAGE", 2)
+        self.assertEqual(history.text, "OLD MESSAGE\nNEW MESSAGE")
+        self.assertEqual(history.view()["lines"], ["OLD MESSAGE", "NEW MESSAGE▏"])
+
+    def test_provisional_word_is_replaced_without_duplicates(self):
+        history = Scrollback()
+        history.update("CQ TE", 1)
+        history.update("CQ TEST", 1)
+        self.assertEqual(history.text, "CQ TEST")
+
+    def test_bounded_history_keeps_reading_anchor_when_head_expires(self):
+        history = Scrollback(columns=4, rows=2, limit=20)
+        history.update("aaaa bbbb cccc dddd", 1)
+        history.scroll(-2)
+        history.update("bbbb cccc dddd eeee", 1, offset=5)
+        self.assertLessEqual(len(history.text), 20)
+        self.assertTrue(history.view()["browsing"])
+        self.assertEqual(history.view()["lines"], ["bbbb", "cccc"])
 
 
 class RadioCW(unittest.TestCase):
@@ -356,6 +447,134 @@ class RadioCW(unittest.TestCase):
         self.assertEqual(rx.radio_state["mode"], 0)
         self.assertIn(True, [call.args[0] for call in decoder.configure.call_args_list])
         self.assertFalse(decoder.configure.call_args.args[0])
+
+    def test_f_x_and_fn_arrows_scroll_without_tuning(self):
+        import os, runpy
+        from pathlib import Path
+        from unittest.mock import Mock
+
+        module = runpy.run_path(
+            str(Path(__file__).resolve().parents[1] / "app/icomzero")
+        )
+        with patch.dict(
+            module["Receiver"].__init__.__globals__, {"read_config": lambda: {}}
+        ):
+            rx = module["Receiver"]()
+        rx.frequency = 7029000
+        rx.radio_state = {"mode": 0}
+        rx.thread = Mock()
+        rx.thread.is_alive.return_value = True
+        rx.tune = Mock()
+        rx.command = Mock()
+        decoder = Mock()
+        decoder.snapshot.return_value = {
+            "text": "CQ TEST",
+            "pitch": 600,
+            "wpm": 20,
+            "key": False,
+        }
+        moves = []
+
+        class Probe(Scrollback):
+            def scroll(self, direction):
+                moves.append(direction)
+                super().scroll(direction)
+
+        read, write = os.pipe()
+        try:
+            events = (
+                (17, 1),
+                (33, 1),
+                (33, 2),
+                (45, 1),
+                (389, 1),
+                (103, 1),
+                (108, 1),
+                (389, 0),
+                (1, 1),
+            )
+            os.write(
+                write,
+                b"".join(
+                    module["EVENT"].pack(0, 0, 1, key, value) for key, value in events
+                ),
+            )
+            with patch.dict(
+                module["ui"].__globals__,
+                {
+                    "Display": lambda _: Mock(),
+                    "Receiver": lambda: rx,
+                    "load": lambda: ["192.0.2.1", "50001", "test", "test"],
+                },
+            ), patch("cw.Decoder", return_value=decoder), patch("cw.Scrollback", Probe):
+                module["ui"](-1, read)
+        finally:
+            os.close(read)
+            os.close(write)
+        self.assertEqual(moves, [-1, 1, -1, 1])
+        rx.tune.assert_not_called()
+        rx.command.assert_not_called()
+
+    def test_holding_f_repeats_scroll_until_release(self):
+        import os, runpy, threading
+        from pathlib import Path
+        from unittest.mock import Mock
+
+        module = runpy.run_path(
+            str(Path(__file__).resolve().parents[1] / "app/icomzero")
+        )
+        with patch.dict(
+            module["Receiver"].__init__.__globals__, {"read_config": lambda: {}}
+        ):
+            rx = module["Receiver"]()
+        rx.thread = Mock()
+        rx.thread.is_alive.return_value = True
+        rx.frequency = 7029000
+        rx.radio_state = {"mode": 0}
+        decoder = Mock()
+        decoder.snapshot.return_value = {
+            "text": "CQ TEST " * 100,
+            "pitch": 600,
+            "wpm": 20,
+            "key": False,
+        }
+        moves = []
+
+        class Probe(Scrollback):
+            def scroll(self, direction):
+                moves.append(direction)
+                super().scroll(direction)
+
+        read, write = os.pipe()
+
+        def keys():
+            for key in (17, 33):
+                os.write(write, module["EVENT"].pack(0, 0, 1, key, 1))
+            time.sleep(0.55)
+            os.write(
+                write,
+                module["EVENT"].pack(0, 0, 1, 33, 0)
+                + module["EVENT"].pack(0, 0, 1, 1, 1),
+            )
+
+        thread = threading.Thread(target=keys)
+        try:
+            with patch.dict(
+                module["ui"].__globals__,
+                {
+                    "Display": lambda _: Mock(),
+                    "Receiver": lambda: rx,
+                    "load": lambda: ["192.0.2.1", "50001", "test", "test"],
+                },
+            ), patch("cw.Decoder", return_value=decoder), patch("cw.Scrollback", Probe):
+                thread.start()
+                module["ui"](-1, read)
+        finally:
+            thread.join(2)
+            os.close(read)
+            os.close(write)
+        self.assertGreaterEqual(len(moves), 2)
+        self.assertTrue(all(move == -1 for move in moves))
 
     def test_band_presets_and_band_change_keep_cw(self):
         import runpy

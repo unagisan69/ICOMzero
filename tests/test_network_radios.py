@@ -128,6 +128,7 @@ class Kenwood(unittest.TestCase):
     def test_native_tcp_rtp_session_without_a_bridge(self):
         errors, audio, scopes, states = [], [], [], {}
         stop = threading.Event()
+        audio_events = []
         with socket.socket() as server, socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as reserve:
             server.bind(("127.0.0.1", 0))
             server.listen()
@@ -142,6 +143,7 @@ class Kenwood(unittest.TestCase):
                         connection.settimeout(3)
                         data = b""
                         streaming = False
+                        sequence = 65535
                         while not stop.is_set():
                             data += connection.recv(4096)
                             while b";" in data:
@@ -159,7 +161,8 @@ class Kenwood(unittest.TestCase):
                                 if reply:
                                     connection.sendall((reply + ";").encode())
                             if streaming:
-                                packet = bytes.fromhex("806000010000000000000000") + struct.pack("<320h", *([100] * 320))
+                                packet = struct.pack(">BBHII", 0x80, 96, sequence, 0, 0) + struct.pack("<320h", *([100] * 320))
+                                sequence = (sequence + (2 if sequence==65535 else 1)) % 65536
                                 udp.sendto(packet, ("127.0.0.1", audio_port))
                 except (OSError, ValueError) as error:
                     if not stop.is_set():
@@ -169,24 +172,27 @@ class Kenwood(unittest.TestCase):
             thread.start()
             def samples(pcm):
                 audio.append(pcm)
-                if scopes:
+                audio_events.append("audio")
+                if scopes and len(audio)>=2:
                     stop.set()
             def sweep(*args):
                 scopes.append(args)
-                if audio:
+                if len(audio)>=2:
                     stop.set()
             timer = threading.Timer(4, stop.set)
             timer.start()
             try:
                 listen("127.0.0.1", port, "u", "p", stop, lambda _: None, samples,
                        lambda hz: states.update(frequency=hz), sweep,
-                       on_state=lambda k, v: states.update({k: v}), model="TS-890S", audio_port=audio_port)
+                       on_state=lambda k, v: states.update({k: v}), model="TS-890S", audio_port=audio_port, on_audio_gap=lambda: audio_events.append("gap"))
             finally:
                 timer.cancel()
                 stop.set()
                 thread.join(1)
             self.assertFalse(errors)
             self.assertTrue(audio)
+            self.assertEqual(audio_events[:3],["audio","gap","audio"])
+            self.assertEqual(audio_events.count("gap"),1)
             self.assertEqual(len(audio[0]), 1920)
             self.assertTrue(scopes)
             self.assertEqual(states["model"], "TS-890S")

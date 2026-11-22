@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.16.4 — 2026-11-22
+
+- Preserve CW timing through late but contiguous audio. Icom and Kenwood RX sequence gaps now explicitly resynchronize CW; remove the wall-clock delay reset and enlarge the bounded worker queue to absorb packet bursts.
+- Learn letter and word gap groups separately from character speed, including stretched/Farnsworth spacing. Keep early spacing decisions provisional and cache the timing model to reduce repeated work.
+- Add F/X and Fn+F/Fn+X CW scrollback, including hold repeat. Stay on the reading position while new text arrives; scrolling to the newest line resumes automatic following.
+- Keep up to 16,384 characters during a Radio session. Retunes, reconnects, tone changes and audio resynchronization separate segments with a line break instead of clearing the visible history. Use a monospaced CW font, a history-position header and scrollbar while browsing.
+- Add regressions for delayed delivery versus actual loss, sequence wraparound, burst handling, stretched spacing, keyboard routing, bounded scrollback and returning to live follow.
+
 ## 0.16.3 — 2026-11-22
 
 - Stabilize CW tone acquisition with a bounded spectral history, keyed-energy selection, sub-bin pitch tracking and a short confirmation/lookback. Avoid latching onto a nearby steady carrier; reacquiring a tone resets its speed estimate.

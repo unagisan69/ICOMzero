@@ -1,10 +1,11 @@
 """Receive-only, single-tone CW decoding with adaptive Morse timing."""
 
 from collections import deque
+from bisect import bisect_right
+import textwrap
 import math
 import queue
 import threading
-import time
 import numpy as np
 
 MORSE = dict(
@@ -35,12 +36,14 @@ MORSE.update(
     }
 )
 LETTERS = {value: key for key, value in MORSE.items()}
+HISTORY_CHARS = 16384
 
 
 class Timing:
     """Learn one/three-unit marks and one/three/seven-unit gaps."""
 
-    def __init__(self, text=""):
+    def __init__(self, text="", offset=0):
+        self.discarded = offset
         self.prefix = text
         self.preview = ""
         self.word_marks = []
@@ -51,6 +54,7 @@ class Timing:
         self.learned = False
         self.history = deque(maxlen=64)
         self.transitions = 0
+        self.spacing_cache = None
         self.buffer = []
         self.down = False
         self.changed = 0.0
@@ -93,35 +97,78 @@ class Timing:
 
     @property
     def text(self):
-        return (self.prefix + self.preview)[-1024:]
+        return (self.prefix + self.preview)[-HISTORY_CHARS:]
+
+    @property
+    def offset(self):
+        return self.discarded + max(0, len(self.prefix + self.preview) - HISTORY_CHARS)
+
+    def spacing(self):
+        key = (self.transitions, round(self.unit, 5))
+        if self.spacing_cache is not None and self.spacing_cache[0] == key:
+            return self.spacing_cache[1]
+        gaps = np.array(
+            [d for mark, d in self.history if not mark and 0.015 <= d <= 2.5]
+        )
+        short = gaps[gaps < 1.8 * self.unit]
+        intra = float(np.median(short)) if len(short) >= 4 else self.unit
+        long = gaps[gaps > max(1.8 * intra, 1.5 * self.unit)]
+        letter = float(np.median(long)) if len(long) else 3 * intra
+        ready = False
+        boundary = 1.9 * letter
+        if len(long) >= 4:
+            logged = np.log(long)
+            low, high = np.percentile(logged, [20, 85])
+            for _ in range(4):
+                group = abs(logged - high) < abs(logged - low)
+                if group.all() or not group.any():
+                    break
+                low, high = np.median(logged[~group]), np.median(logged[group])
+            if high - low >= math.log(1.5) and group.any() and not group.all():
+                letter = math.exp(float(low))
+                boundary = math.exp(float((low + high) / 2))
+                ready = True
+        result = (intra, letter, max(3.5 * self.unit, 1.6 * letter, boundary), ready)
+        self.spacing_cache = (key, result)
+        return result
 
     def gap_means(self):
-        gaps = [
-            d for mark, d in self.history if not mark and 0.015 <= d <= 4.5 * self.unit
-        ]
-        short = [d for d in gaps if d < 1.8 * self.unit]
-        long = [d for d in gaps if d >= 1.8 * self.unit]
-        intra = float(np.median(short)) if len(short) >= 4 else self.unit
-        letter = float(np.median(long)) if len(long) >= 2 else 3 * intra
-        return intra, letter
+        return self.spacing()[:2]
 
     def word_gap(self):
-        _, letter = self.gap_means()
-        return max(3.5 * self.unit, min(5 * self.unit, 1.9 * letter))
+        return self.spacing()[2]
 
     def decode_word(self):
+        if not self.word_marks:
+            return ""
+        # Keep the first few spacing decisions provisional until both long-gap
+        # groups are visible. This also allows Farnsworth spacing without a dictionary.
+        start = 0
+        words = []
+        for index, gap in enumerate(self.word_gaps):
+            if gap >= self.word_gap():
+                words.append(
+                    self.decode_group(
+                        self.word_marks[start : index + 1], self.word_gaps[start:index]
+                    )
+                )
+                start = index + 1
+        words.append(self.decode_group(self.word_marks[start:], self.word_gaps[start:]))
+        return " ".join(words)
+
+    def decode_group(self, marks, gaps):
         # Compare Morse-valid segmentations across a whole word. Uneven hand
         # spacing must not permanently turn two letters into an invalid symbol.
         # Costs use measured gaps only: no language dictionary or callsign guesses.
-        if not self.word_marks:
+        if not marks:
             return ""
         short, long = self.gap_means()
-        code = ["-" if d >= 2 * self.unit else "." for d in self.word_marks]
+        code = ["-" if d >= 2 * self.unit else "." for d in marks]
         # Keep already-valid letter boundaries. Reconsider ambiguous timing only
         # when the hard split produces a symbol outside the Morse alphabet.
         hard = []
         start = 0
-        for index, gap in enumerate(self.word_gaps):
+        for index, gap in enumerate(gaps):
             if gap >= 2 * self.unit:
                 hard.append(LETTERS.get("".join(code[start : index + 1])))
                 start = index + 1
@@ -143,9 +190,9 @@ class Timing:
                     continue
                 cost = best[start][0] + 0.4
                 if start:
-                    cost += gap_cost(self.word_gaps[start - 1], True)
+                    cost += gap_cost(gaps[start - 1], True)
                 for index in range(start, end - 1):
-                    cost += gap_cost(self.word_gaps[index], False)
+                    cost += gap_cost(gaps[index], False)
                 if cost < best[end][0]:
                     best[end] = (cost, best[start][1] + letter)
         return best[-1][1] if best[-1][0] / count < 3 else "?"
@@ -162,7 +209,8 @@ class Timing:
                 self.prefix += " "
         else:
             self.prefix += value
-        self.prefix = self.prefix[-1024:]
+        self.discarded += max(0, len(self.prefix) - HISTORY_CHARS)
+        self.prefix = self.prefix[-HISTORY_CHARS:]
 
     def flush(self):
         if self.dirty:
@@ -182,7 +230,7 @@ class Timing:
             else:
                 self.append(" ")
         else:
-            if duration >= self.word_gap():
+            if self.spacing()[3] and duration >= self.word_gap():
                 self.append(" ")
             elif self.word_marks:
                 self.pending_gap = duration
@@ -237,14 +285,14 @@ class Timing:
             if self.learned:
                 if quiet >= 2.2 * self.unit:
                     self.flush()
-                if quiet >= self.word_gap():
-                    self.append(" ")
+                # A silence can be a stretched letter gap. Commit on the next
+                # mark, after its full duration is known, while showing a preview.
 
 
 class Core:
     """20 ms spectral windows and 5 ms key timing; mono signed 16-bit PCM."""
 
-    def __init__(self, rate=48000, text="", tone=None):
+    def __init__(self, rate=48000, text="", tone=None, offset=0):
         if rate not in (12000, 48000):
             raise ValueError("CW audio must be 12 or 48 kHz")
         if tone is not None and not 200 <= tone <= 2800:
@@ -268,7 +316,7 @@ class Core:
         self.frames = deque(maxlen=400)
         self.floor = None
         self.floor_tick = 0
-        self.timing = Timing(text)
+        self.timing = Timing(text, offset)
 
     def measures(self, power, center):
         carrier = float(power[center - 1 : center + 2].sum())
@@ -378,7 +426,12 @@ class Core:
                         self.pitch = float(self.candidate_pitch)
                         self.tone_profile.fill(0)
                         self.timing = Timing(
-                            self.timing.text.rstrip() + " " if self.timing.text else ""
+                            (
+                                self.timing.text.rstrip() + "\n"
+                                if self.timing.text
+                                else ""
+                            ),
+                            offset=self.timing.offset,
                         )
                         # Confirmation delays the lock, but must not cut off its first mark.
                         for old_power, old_rms, stamp in self.frames:
@@ -398,6 +451,7 @@ class Core:
     def snapshot(self):
         return {
             "text": self.timing.text,
+            "offset": self.timing.offset,
             "pitch": round(self.pitch) if self.pitch is not None else None,
             "wpm": round(1.2 / self.timing.unit) if self.timing.learned else None,
             "key": self.timing.down,
@@ -423,7 +477,7 @@ class Decoder:
     def __init__(self, rate=48000):
         self.rate = rate
         self.lock = threading.Lock()
-        self.jobs = queue.Queue(maxsize=16)
+        self.jobs = queue.Queue(maxsize=64)
         self.stop = threading.Event()
         self.active = False
         self.context = None
@@ -448,24 +502,34 @@ class Decoder:
                 return
             generation = self.generation
         try:
-            self.jobs.put_nowait((generation, time.monotonic(), pcm))
+            self.jobs.put_nowait((generation, pcm))
         except queue.Full:
             with self.lock:
                 self.dropped += 1
                 self.generation += 1
+                self.state = {
+                    **self.state,
+                    "text": "",
+                    "offset": 0,
+                    "key": False,
+                    "status": "Resynchronizing audio",
+                }
             # A dropped interval must not join two Morse elements.
+
+    def discontinuity(self):
+        """The transport confirmed missing samples, rather than late packet delivery."""
+        self.feed(None)
 
     def snapshot(self):
         with self.lock:
-            return dict(self.state)
+            return {**self.state, "revision": self.generation}
 
     def work(self):
         generation = -1
         core = Core(self.rate)
-        last = None
         while not self.stop.is_set():
             try:
-                current, stamp, pcm = self.jobs.get(timeout=0.1)
+                current, pcm = self.jobs.get(timeout=0.1)
             except queue.Empty:
                 continue
             with self.lock:
@@ -474,15 +538,15 @@ class Decoder:
             if current != generation:
                 core = Core(self.rate, tone=self.tone)
                 generation = current
-                last = None
-            if last is not None and stamp - last > 0.15:
+            if pcm is None:
                 core = Core(
                     self.rate,
-                    core.timing.text.rstrip() + " " if core.timing.text else "",
+                    core.timing.text.rstrip() + "\n" if core.timing.text else "",
+                    offset=core.snapshot().get("offset", 0),
                     tone=self.tone,
                 )
-            last = stamp
-            core.feed(pcm)
+            else:
+                core.feed(pcm)
             state = core.snapshot()
             with self.lock:
                 if current == self.generation and self.active:
@@ -492,3 +556,80 @@ class Decoder:
         self.stop.set()
         if self.thread.ident is not None:
             self.thread.join(timeout=1)
+
+
+class Scrollback:
+    """Bounded CW text with an absolute reading anchor; None means follow newest."""
+
+    def __init__(self, columns=39, rows=3, limit=HISTORY_CHARS):
+        self.columns, self.rows, self.limit = columns, rows, limit
+        self.past = ""
+        self.past_start = 0
+        self.segment_start = 0
+        self.revision = None
+        self.text = ""
+        self.start = 0
+        self.anchor = None
+        self.lines = [""]
+        self.starts = [0]
+
+    def update(self, text, revision=0, offset=0):
+        if revision != self.revision:
+            if self.revision is not None:
+                previous = self.text.rstrip() + "\n" if self.text else ""
+                drop = max(0, len(previous) - self.limit)
+                self.past = previous[drop:]
+                self.past_start = self.start + drop
+            self.segment_start = self.past_start + len(self.past)
+            self.revision = revision
+        if offset:
+            combined = text
+            start = self.segment_start + offset
+        else:
+            combined = self.past + text
+            start = self.past_start
+        drop = max(0, len(combined) - self.limit)
+        combined = combined[drop:]
+        start += drop
+        if (combined, start) == (self.text, self.start):
+            return
+        self.text, self.start = combined, start
+        lines = []
+        starts = []
+        position = 0
+        for paragraph in combined.split("\n"):
+            cursor = 0
+            for line in textwrap.wrap(
+                paragraph, self.columns, break_on_hyphens=False
+            ) or [""]:
+                found = paragraph.find(line, cursor)
+                lines.append(line)
+                starts.append(start + position + found)
+                cursor = found + len(line)
+            position += len(paragraph) + 1
+        self.lines, self.starts = lines, starts
+
+    def top(self):
+        tail = max(0, len(self.lines) - self.rows)
+        return (
+            tail
+            if self.anchor is None
+            else max(0, min(tail, bisect_right(self.starts, self.anchor) - 1))
+        )
+
+    def scroll(self, direction):
+        tail = max(0, len(self.lines) - self.rows)
+        wanted = max(0, min(tail, self.top() + direction))
+        self.anchor = None if wanted == tail else self.starts[wanted]
+
+    def view(self):
+        top = self.top()
+        lines = self.lines[top : top + self.rows]
+        if self.anchor is None:
+            lines = list(lines)
+            lines[-1] += "▏"
+        return {
+            "lines": lines,
+            "browsing": self.anchor is not None,
+            "position": (top + 1, len(self.lines)),
+        }

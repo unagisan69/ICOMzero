@@ -257,6 +257,7 @@ def listen(
     admin=False,
     tx_enabled=False,
     take_tx=lambda: None,
+    on_audio_gap=lambda: None,
 ):
     if model == "TS-890S":
         from kenwood import listen as listen_kenwood
@@ -278,6 +279,7 @@ def listen(
             admin,
             tx_enabled,
             take_tx,
+            on_audio_gap,
         )
     if model != "Auto (Icom)" and model not in PROFILES:
         raise RadioError("Choose a supported network radio")
@@ -478,6 +480,11 @@ def listen(
                                     continue
                                 if last_pcm is None:
                                     on_status("Receiving audio")
+                                if (
+                                    last_pcm is not None
+                                    and (sequence - last_pcm) % 65536 != 1
+                                ):
+                                    on_audio_gap()
                                 last_pcm = sequence
                                 deadline = time.monotonic() + 10
                                 on_audio(data[24:])

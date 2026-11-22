@@ -14,6 +14,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import textwrap
 import threading
 import time
 
@@ -126,6 +127,7 @@ class Receiver:
         self.commands = []
         self.radio_state = {}
         self.audio_observer = None
+        self.audio_gap_observer = None
         self.play_audio = True
         self.tx_enabled = False
         self.tx_job = None
@@ -220,7 +222,8 @@ class Receiver:
                            audio_port=(int(self.session_config.get("Audio port", "60001"))
                                        if self.session_config.get("Radio") == "TS-890S" else 60001),
                            admin=self.session_config.get("Login") == "Admin",
-                           tx_enabled=self.tx_enabled, take_tx=self.take_tx)
+                           tx_enabled=self.tx_enabled, take_tx=self.take_tx,
+                           on_audio_gap=self.audio_gap)
                     break
                 except (ConnectionLost, OSError) as error:
                     from radio import connection_diagnostic
@@ -256,6 +259,10 @@ class Receiver:
                 except subprocess.TimeoutExpired:
                     player.kill()
                     player.wait()
+
+    def audio_gap(self):
+        if self.audio_gap_observer is not None:
+            self.audio_gap_observer()
 
     def take_tx(self):
         with self.tune_lock:
@@ -379,6 +386,7 @@ class Display:
             "title": ImageFont.truetype(font + "-Bold.ttf", 22),
             "body": ImageFont.truetype(font + ".ttf", 14),
             "small": ImageFont.truetype(font + ".ttf", 12),
+            "cw": ImageFont.truetype(font + "Mono.ttf", 12),
         }
 
     def update_waterfall(self, scope):
@@ -495,19 +503,20 @@ class Display:
                 detail += " · Learning speed"
             label(14, 96, "CW  " + detail, "small", GREEN)
             draw.ellipse((293,99,300,106),fill=GREEN if cw.get("key") else CARD)
-            lines = []
-            line = ""
-            for word in (cw.get("text", "") + "▏").split():
-                candidate = line + (" " if line else "") + word
-                if line and draw.textlength(candidate, font=self.fonts["small"]) > 289:
-                    lines.append(line); line = ""
-                for char in ((" " if line else "") + word):
-                    if draw.textlength(line + char, font=self.fonts["small"]) > 289:
-                        lines.append(line); line = ""
-                    line += char
-            lines.append(line)
-            for row, text in enumerate(lines[-3:]):
-                label(14, 110 + row * 13, text, "small", WHITE)
+            if cw.get("browsing"):
+                position,total=cw["position"]
+                draw.rectangle((12,95,288,109),fill="#111f2d")
+                label(14,96,f"CW History · {position}/{total}","small",GREEN)
+            lines=cw.get("lines")
+            if lines is None:
+                lines=textwrap.wrap(cw.get("text","")+"▏",39,break_on_hyphens=False)[-3:]
+            for row,text in enumerate(lines):
+                label(14,110+row*13,text,"cw",WHITE)
+            if cw.get("browsing"):
+                position,total=cw["position"]
+                y=112+int((position-1)/max(1,total-3)*29)
+                draw.line((306,112,306,147),fill="#355361",width=2)
+                draw.line((306,y,306,min(147,y+6)),fill=GREEN,width=2)
         if volume_visible:
             image = notice_popup(self, image, "Volume", f"{volume}%")
             draw = ImageDraw.Draw(image)
@@ -523,10 +532,11 @@ class Display:
                 ("Fn + S / D", "Volume down / up"),
                 ("Fn + A", "Mute / unmute"),
                 ("W", "CW decoder on / off"),
+                ("F / X", "Scroll CW history"),
                 ("S / Esc", "Radio settings / menu"),
             )
             for index, (key, action) in enumerate(shortcuts):
-                y = 33 + index * 12
+                y = 33 + index * 11
                 label(18, y, key, "small", GREEN)
                 label(101, y, action, "small")
             label(18, 149, "Tab / Esc - Close help", "small", MUTED)
@@ -558,7 +568,7 @@ class Display:
 
 def ui(lcd, keyboard):
     from settings_ui import SettingsScreens
-    from cw import Decoder as CWDecoder
+    from cw import Decoder as CWDecoder, Scrollback
     display = Display(lcd)
     values = load()
     if not values[0]:
@@ -569,12 +579,16 @@ def ui(lcd, keyboard):
     rx = Receiver()
     cw_decoder = CWDecoder(rate=RATE)
     rx.audio_observer = cw_decoder.feed
+    rx.audio_gap_observer = cw_decoder.discontinuity
+    cw_history = Scrollback()
     cw_enabled = False
     cw_tone = None
     last_mode = None
     shift = set()
     fn = False
     held_tune = None
+    held_scroll = None
+    next_scroll = 0
     next_repeat = 0
     save_at = None
     band = None
@@ -592,6 +606,11 @@ def ui(lcd, keyboard):
                 save_at = None
             if band is not None or radio_menu is not None or help_open or not rx.busy():
                 held_tune = None
+            if band is not None or radio_menu is not None or help_open or not cw_enabled:
+                held_scroll = None
+            if held_scroll is not None and now >= next_scroll:
+                cw_history.scroll(-1 if held_scroll in (33,103) else 1)
+                next_scroll = now + .09
             if held_tune is not None and now >= next_repeat:
                 rx.tune(steps=-1 if held_tune in (44, 105) else 1)
                 next_repeat = now + 0.09
@@ -603,6 +622,10 @@ def ui(lcd, keyboard):
             cw_active = rx.busy() and cw_enabled and not rx.radio_state.get("ptt") and rx.radio_state.get("tuner") != 2
             cw_decoder.configure(cw_active, (rx.session_revision, rx.frequency, mode), tone=cw_tone)
             cw_state = cw_decoder.snapshot() if cw_enabled else None
+            if cw_state is not None:
+                revision=cw_state.get("revision",(rx.session_revision,rx.frequency,mode,cw_enabled,cw_tone))
+                cw_history.update(cw_state.get("text",""),revision,cw_state.get("offset",0))
+                cw_state.update(cw_history.view())
             if cw_state is not None and not cw_active:
                 cw_state["status"] = "Connect to decode" if not rx.busy() else "Paused during TX/tuning"
             bands = presets(rx.radio_state.get("profile", DEFAULT_PROFILE), cw=cw_enabled or mode in (3, 7))
@@ -625,6 +648,8 @@ def ui(lcd, keyboard):
                     (shift.add if pressed else shift.discard)(key)
                     continue
                 if not pressed:
+                    if key == held_scroll:
+                        held_scroll = None
                     if held_tune is not None and key in (44, 46, 105, 106):
                         held_tune = None
                     continue
@@ -692,6 +717,10 @@ def ui(lcd, keyboard):
                     elif key == 28:
                         rx.change_band(bands[band][1])
                         band = None
+                elif cw_enabled and key in (33,45,103,108):
+                    cw_history.scroll(-1 if key in (33,103) else 1)
+                    held_scroll = key
+                    next_scroll = time.monotonic() + .35
                 elif key == 15:
                     help_open = True
                     held_tune = None
