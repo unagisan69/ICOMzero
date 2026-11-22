@@ -27,12 +27,12 @@ Connect the Cardputer to a network that can reach the radio and enable the radio
 For manual installation, download the `.deb` from [GitHub Releases](https://github.com/unagisan69/ICOMzero/releases), then install it on the Cardputer.
 
 ```sh
-sudo apt install ./icomzero_0.16.1-1_arm64.deb
+sudo apt install ./icomzero_0.16.2-1_arm64.deb
 ```
 
 Open **ICOMzero** from APPLaunch after installation.
 
-Version 0.16.1 includes the hardware-validated IC-7300MK2 FT8 reliability updates: continuous 12 kHz audio, a 300 ms transmit buffer with matching PTT drain, complete packet-loss repair, and bounded control recovery. The FT8 status bar keeps the armed dot and TX/SWR/power indicators without AUTO or POTA text labels. Successful contacts are saved locally and uploaded independently to enabled logging services. Radio listening remains at 48 kHz. Compare the radio’s own power/SWR/ALC meters with the app; nominal power is a control setting, not a guarantee of measured RF output.
+Version 0.16.2 includes the hardware-validated IC-7300MK2 FT8 reliability updates: continuous 12 kHz audio, a 300 ms transmit buffer with matching PTT drain, complete packet-loss repair, and bounded control recovery. The FT8 status bar keeps the armed dot and TX/SWR/power indicators without AUTO or POTA text labels. Successful contacts are saved locally and uploaded independently to enabled logging services. Radio listening remains at 48 kHz. Compare the radio’s own power/SWR/ALC meters with the app; nominal power is a control setting, not a guarantee of measured RF output.
 
 ## Listen
 
@@ -52,11 +52,12 @@ Press **Tab** on the receiver screen to open the keyboard shortcut guide. **Tab*
 
 ## CW receive decoder
 
-While listening in **Radio**, press **W** to select CW and start the receive-only software decoder after mode confirmation. W again returns to the preceding sideband. **S → Mode** also selects **CW** or **CW-R**; M still selects USB/LSB. Band selection preserves CW/CW-R and offers CW receive frequencies. A **100 Hz** tuning step helps center a station. Icom CW requests filter 2; its actual bandwidth follows the radio’s filter configuration.
+While listening in **Radio**, press **W** to turn CW decoding on or off. **This leaves the radio’s receive mode, frequency and filter unchanged.** Keep LSB or USB selected if that is where the CW sounds clear. **S → CW decoder** offers the same toggle. Native **CW/CW-R** remain available under **S → Mode**, but changing demodulation modes can move the receive passband and require retuning to the station. Selecting a native CW mode also enables decoding.
 
-The panel beneath the waterfall shows the newest decoded text, detected tone and estimated character speed. A green dot follows the received tone. Audio is decoded before speaker volume/mute processing, so Fn+A can silence the speaker without stopping decoding. This function does not key the radio, send Morse, reply or log CW contacts. Changing frequency/mode or reconnecting resets partial characters; missing audio triggers resynchronization.
+The panel beneath the waterfall shows the newest decoded text, detected tone and estimated character speed. A green dot follows the received tone. Audio is decoded before speaker volume/mute processing, so Fn+A can silence the speaker without stopping decoding. **S → CW tone** selects Auto or a specific audio pitch when several signals are audible; tone selection affects only the decoder. A 100 Hz tuning step helps center a station. Decoding does not key the radio, send Morse, reply or log CW contacts. Changing frequency/mode or reconnecting resets partial characters; missing audio triggers resynchronization.
 
-The automatic detector searches roughly **300–1400 Hz**. It uses [standard Morse timing](https://www.arrl.org/files/file/Technology/x9004008.pdf) and was tested with generated noisy audio at **8–35 WPM**. Tune a clear, single CW signal and use an appropriate narrow receive filter. Mixed stations, QRM, deep fading and irregular hand spacing can cause errors; unknown symbols appear as question marks. Speed is an estimate, not a measured overall QSO rate.
+The automatic detector searches roughly **200–2800 Hz** and checks tone concentration locally rather than requiring one signal to dominate the entire passband. It uses [standard Morse timing](https://www.arrl.org/files/file/Technology/x9004008.pdf) and was tested with generated noisy audio at **8–35 WPM**. Tune a clear CW signal and select its tone if needed. Mixed stations, RTTY/digital signals, QRM, deep fading and irregular hand spacing can cause errors; unknown symbols appear as question marks. Speed estimates describe character timing, not overall QSO rate.
+
 
 ![CW receive decoder](docs/images/cw.png)
 
@@ -134,7 +135,7 @@ sudo apt install build-essential python3-pil python3-numpy
 make check
 make test
 make package
-sudo apt install ./build/icomzero_0.16.1-1_arm64.deb
+sudo apt install ./build/icomzero_0.16.2-1_arm64.deb
 ```
 
 Use `make package APPBUILDER=/path/to/AppBuilder` for another checkout location. The package includes a foreground APPLaunch entry and declares its Python, Pillow, NumPy, font, ALSA, and PipeWire dependencies.

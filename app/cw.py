@@ -163,7 +163,7 @@ class Timing:
 class Core:
     """20 ms spectral windows, 10 ms timing; accepts mono signed 16-bit PCM."""
 
-    def __init__(self, rate=48000, text=""):
+    def __init__(self, rate=48000, text="", tone=None):
         if rate not in (12000, 48000):
             raise ValueError("CW audio must be 12 or 48 kHz")
         self.factor = rate // 12000
@@ -171,9 +171,12 @@ class Core:
         self.audio = np.empty(0, dtype=np.float32)
         self.window = np.hanning(240)
         self.bins = np.fft.rfftfreq(240, 1 / 12000)
-        self.band = np.flatnonzero((self.bins >= 300) & (self.bins <= 1400))
+        self.band = np.flatnonzero((self.bins >= 200) & (self.bins <= 2800))
         self.clock = 0.0
-        self.pitch = None
+        if tone is not None and not 200 <= tone <= 2800:
+            raise ValueError("CW tone must be 200–2800 Hz")
+        self.fixed_tone = tone
+        self.pitch = float(tone) if tone is not None else None
         self.signal_at = -10.0
         self.level = 0.0
         self.timing = Timing(text)
@@ -193,9 +196,11 @@ class Core:
             power = np.abs(np.fft.rfft((frame - frame.mean()) * self.window)) ** 2
             peak = int(self.band[np.argmax(power[self.band])])
             noise = max(float(np.median(power[self.band])), 1e-10)
-            total = max(float(power[self.band].sum()), 1e-10)
+            total = max(float(power[max(1, peak - 8) : peak + 9].sum()), 1e-10)
             rms = float(np.sqrt(np.mean(frame * frame)))
-            if self.pitch is None or self.clock - self.signal_at > 2:
+            if self.fixed_tone is None and (
+                self.pitch is None or self.clock - self.signal_at > 2
+            ):
                 if (
                     power[peak] / noise > 30
                     and power[max(0, peak - 1) : peak + 2].sum() / total > 0.85
@@ -206,16 +211,22 @@ class Core:
             if self.pitch is not None:
                 center = int(round(self.pitch / 50))
                 carrier = float(power[max(0, center - 1) : center + 2].sum())
+                local_total = max(
+                    float(power[max(1, center - 8) : center + 9].sum()), 1e-10
+                )
                 self.level = max(carrier, self.level * 0.995)
                 keyed = (
                     carrier / noise > (10 if self.timing.down else 16)
                     and carrier > self.level * (0.025 if self.timing.down else 0.05)
-                    and carrier / total > (0.65 if self.timing.down else 0.8)
+                    and carrier / local_total > (0.65 if self.timing.down else 0.8)
                     and rms > 0.0001
                 )
                 if keyed:
                     self.signal_at = self.clock
-                    if abs(self.bins[peak] - self.pitch) <= 75:
+                    if (
+                        self.fixed_tone is None
+                        and abs(self.bins[peak] - self.pitch) <= 75
+                    ):
                         self.pitch = 0.95 * self.pitch + 0.05 * float(self.bins[peak])
             self.clock += 0.01
             self.timing.feed(bool(keyed), self.clock)
@@ -244,19 +255,20 @@ class Decoder:
         self.stop = threading.Event()
         self.active = False
         self.context = None
+        self.tone = None
         self.generation = 0
         self.state = Core(rate).snapshot()
         self.dropped = 0
         self.thread = threading.Thread(target=self.work, daemon=True)
         self.thread.start()
 
-    def configure(self, active, context=None):
+    def configure(self, active, context=None, tone=None):
         with self.lock:
-            if (bool(active), context) == (self.active, self.context):
+            if (bool(active), context, tone) == (self.active, self.context, self.tone):
                 return
-            self.active, self.context = bool(active), context
+            self.active, self.context, self.tone = bool(active), context, tone
             self.generation += 1
-            self.state = Core(self.rate).snapshot()
+            self.state = Core(self.rate, tone=tone).snapshot()
 
     def feed(self, pcm):
         with self.lock:
@@ -288,13 +300,14 @@ class Decoder:
                 if current != self.generation or not self.active:
                     continue
             if current != generation:
-                core = Core(self.rate)
+                core = Core(self.rate, tone=self.tone)
                 generation = current
                 last = None
             if last is not None and stamp - last > 0.15:
                 core = Core(
                     self.rate,
                     core.timing.text.rstrip() + " " if core.timing.text else "",
+                    tone=self.tone,
                 )
             last = stamp
             core.feed(pcm)

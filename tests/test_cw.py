@@ -92,6 +92,36 @@ class CW(unittest.TestCase):
         ):
             self.assertEqual(self.decode(pcm)["text"].strip(), "")
 
+    def test_ssb_audio_high_pitch_with_a_second_tone(self):
+        target = np.frombuffer(
+            recording(wpm=20, hz=2000, noise=0.025), dtype="<i2"
+        ).astype(float)
+        harmonic = (
+            np.frombuffer(recording(wpm=20, hz=1000, noise=0), dtype="<i2").astype(
+                float
+            )
+            * 0.6
+        )
+        pcm = np.clip(target + harmonic, -32767, 32767).astype("<i2").tobytes()
+        state = self.decode(pcm)
+        self.assertEqual(state["text"].strip(), "CQ TEST K1ABC 599")
+        self.assertLess(abs(state["pitch"] - 2000), 55)
+
+    def test_manual_tone_ignores_a_louder_carrier_elsewhere(self):
+        pcm = (
+            np.frombuffer(recording(wpm=20, hz=2000, noise=0.025), dtype="<i2").astype(
+                float
+            )
+            / 32768
+        )
+        pcm += 0.5 * np.sin(2 * np.pi * 1000 * np.arange(len(pcm)) / 48000)
+        core = Core(tone=2000)
+        data = (np.clip(pcm, -1, 1) * 32767).astype("<i2").tobytes()
+        for i in range(0, len(data), 1920):
+            core.feed(data[i : i + 1920])
+        self.assertEqual(core.snapshot()["text"].strip(), "CQ TEST K1ABC 599")
+        self.assertEqual(core.snapshot()["pitch"], 2000)
+
     def test_filtered_receiver_noise_does_not_decode_as_letters(self):
         for bandwidth in (250, 500):
             n = 48000 * 8
@@ -171,7 +201,7 @@ class RadioCW(unittest.TestCase):
             civ.tick(1.03)
             self.assertEqual(stream.sent[-1], b"\x04")
 
-    def test_w_selects_cw_and_returns_to_previous_sideband(self):
+    def test_w_toggles_decoding_without_changing_mode_or_frequency(self):
         import os, runpy
         from pathlib import Path
         from unittest.mock import Mock
@@ -183,17 +213,19 @@ class RadioCW(unittest.TestCase):
             module["Receiver"].__init__.__globals__, {"read_config": lambda: {}}
         ):
             rx = module["Receiver"]()
-        rx.frequency = 7025000
+        rx.frequency = 7054000
         rx.radio_state = {"mode": 0}
         rx.thread = Mock()
         rx.thread.is_alive.return_value = True
-        requests = []
-
-        def command(action, value):
-            requests.append((action, value))
-            rx.radio_state[action] = value
-
-        rx.command = command
+        rx.command = Mock()
+        decoder = Mock()
+        decoder.snapshot.return_value = {
+            "text": "",
+            "pitch": None,
+            "wpm": None,
+            "key": False,
+            "status": "Listening for CW",
+        }
         read, write = os.pipe()
         try:
             os.write(
@@ -207,12 +239,16 @@ class RadioCW(unittest.TestCase):
                     "Receiver": lambda: rx,
                     "load": lambda: ["192.0.2.1", "50001", "test", "test"],
                 },
-            ):
+            ), patch("cw.Decoder", return_value=decoder):
                 module["ui"](-1, read)
         finally:
             os.close(read)
             os.close(write)
-        self.assertEqual(requests, [("mode", 3), ("mode", 0)])
+        rx.command.assert_not_called()
+        self.assertEqual(rx.frequency, 7054000)
+        self.assertEqual(rx.radio_state["mode"], 0)
+        self.assertIn(True, [call.args[0] for call in decoder.configure.call_args_list])
+        self.assertFalse(decoder.configure.call_args.args[0])
 
     def test_band_presets_and_band_change_keep_cw(self):
         import runpy

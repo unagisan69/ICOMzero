@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.16.2 — 2026-11-22
+
+- Make W toggle CW decoding without changing the radio’s demodulation mode, dial frequency or receive filter. Add an independent CW decoder toggle to Radio settings; native CW/CW-R remain explicit radio mode choices.
+- Extend audio-tone search to 200–2800 Hz for CW heard in SSB, and evaluate local tone concentration so another signal elsewhere in the passband does not mask it. Add manual CW tone selection for crowded passbands.
+- Add regressions for preserving LSB/frequency on W, higher-pitched CW with another tone, and manual tone selection with a louder interfering carrier.
+
 ## 0.16.1 — 2026-11-22
 
 - Tighten CW tone concentration thresholds to reject 250/500 Hz filtered receiver noise without losing the generated noisy 8–35 WPM test messages. Add a filtered-noise regression.
