@@ -833,8 +833,6 @@ def ft8_frame(
         font=display.fonts["small"],
         fill=WHITE if transmitting else MUTED,
     )
-    if auto_active and auto_label == "POTA":
-        draw.text((192, 152), auto_label, font=display.fonts["small"], fill="#f06464")
     now = time.monotonic()
 
     def fresh(name):
