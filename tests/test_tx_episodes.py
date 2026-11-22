@@ -147,3 +147,37 @@ class TxEpisodes(unittest.TestCase):
             civ.finish_tuner_if_idle()
         self.assertTrue(civ.tuning_requested)
         self.assertIn("telemetry lost", civ.protection.check(13.01))
+
+    def test_stalled_civ_reopens_and_requires_fresh_frequency_and_mode(self):
+        civ, channel, _, state = fixtures.TransportSafety.make(self)
+        civ.started = True
+        civ.last_control = civ.created = civ.started_at = 10
+        with patch("time.monotonic", return_value=12.1):
+            civ.tick(12.1)
+        self.assertTrue(civ.recovering)
+        self.assertFalse(civ.open)
+        self.assertTrue(state["civ_recovering"])
+        self.assertTrue(
+            any(body.startswith(b"\xc0\x01\x00") for body in channel.history.values())
+        )
+        self.assertNotIn(bytes.fromhex("1c0001"), channel.sent)
+        for stamp, command in [
+            (12.2, bytes.fromhex("030040070700")),
+            (12.3, bytes.fromhex("040101")),
+        ]:
+            frame = bytes.fromhex("fefee0b6") + command + b"\xfd"
+            with patch("time.monotonic", return_value=stamp):
+                civ.receive(
+                    bytes(16)
+                    + b"\xc1"
+                    + struct.pack("<H", len(frame))
+                    + bytes(2)
+                    + frame
+                )
+            if stamp == 12.2:
+                self.assertTrue(civ.recovering)
+        self.assertFalse(civ.recovering)
+        self.assertTrue(civ.open)
+        self.assertFalse(state["civ_recovering"])
+        self.assertEqual(state["civ_recovered_at"], 12.3)
+        self.assertIsNone(civ.protection.fault)

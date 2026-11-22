@@ -31,6 +31,7 @@ class Pacer:
         protection=lambda: None,
         off_confirmed=None,
         packet_ms=10,
+        drain_seconds=0.2,
     ):
         self.protection = protection
         self.off_confirmed = off_confirmed or (lambda: not self.keyed())
@@ -42,6 +43,7 @@ class Pacer:
         self.status = status
         self.rate = rate
         self.packet_ms = packet_ms
+        self.drain_seconds = drain_seconds
         self.job = None
         self.position = 0
         self.armed = False
@@ -156,7 +158,10 @@ class Pacer:
             self.position += len(partial)
         if (
             self.position >= len(job.pcm)
-            and mono >= self.audio_start_mono + len(job.pcm) / (self.rate * 2) + 0.2
+            and mono
+            >= self.audio_start_mono
+            + len(job.pcm) / (self.rate * 2)
+            + self.drain_seconds
         ):
             self.end(True, wall=wall, mono=mono)
 

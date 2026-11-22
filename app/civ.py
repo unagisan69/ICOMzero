@@ -128,6 +128,8 @@ class Civ:
         self.created = time.monotonic()
         self.started_at = None
         self.last_control = None
+        self.recovering = False
+        self.recovery_fields = set()
         self.source = self.data_mode = self.frequency = self.mode = None
         self.original_source = self.original_data = None
         self.preparing = self.prepared = False
@@ -196,6 +198,7 @@ class Civ:
         return (
             self.tx_enabled
             and self.prepared
+            and not self.recovering
             and not self.protection.fault
             and not self.tuning_requested
             and self.tuner_state != 2
@@ -207,6 +210,14 @@ class Civ:
             and self.frequency == dial
             and all(self.controls.get(name) == 0 for name in self.tx_controls)
         )
+
+    def recovered_field(self, name):
+        if self.recovering:
+            self.recovery_fields.discard(name)
+            if not self.recovery_fields:
+                self.recovering = False
+                self.on_state("civ_recovering", False)
+                self.on_state("civ_recovered_at", time.monotonic())
 
     def finish_tuner_if_idle(self):
         # A real tuner cycle can finish in less than 600 ms. Both tuner and
@@ -265,11 +276,26 @@ class Civ:
                 self.fault_applied = False
                 self.clear_requested = None
                 self.on_state("fault_clear_status", "Warning cleared")
+        # Reopen a stalled serial bridge before the transport's five-second
+        # deadline. UDP audio/pings alone do not establish live CI-V control.
+        if (
+            self.open
+            and not self.recovering
+            and self.last_control is not None
+            and now - self.last_control > 2
+        ):
+            self.open = False
+            self.recovering = True
+            self.recovery_fields = {"frequency", "mode"}
+            self.next_open = 0
+            self.on_state("civ_recovering", True)
+            self.on_state("civ_recovery_at", now)
         if self.ptt_pending and now >= self.ptt_query_at:
             self.schedule(b"\x1c\x00", urgent=True)
             self.ptt_query_at = now + 0.1
         if not self.open and now >= self.next_open:
             self.open_close(4)
+            self.schedule(b"\x04", urgent=True)
             self.schedule(b"\x03", urgent=True)
             self.started = True
             if self.started_at is None:
@@ -540,9 +566,11 @@ class Civ:
                         self.tune_target = None
                     self.frequency = frequency
                     self.on_frequency(frequency)
+                    self.recovered_field("frequency")
             elif len(command) in (2, 3) and command[0] in (1, 4):
                 self.mode = command[1]
                 self.on_state("mode", command[1])
+                self.recovered_field("mode")
             elif (
                 self.tx_enabled
                 and command.startswith(self.tx_source)

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.12.4 — 2026-11-22
+
+- Negotiate a 300 ms Icom FT8 transmit buffer and hold PTT for its matching drain plus a 50 ms margin after the final samples. Preserve UTC packet scheduling and existing transmit watchdog limits.
+- Reopen a stalled CI-V bridge after two seconds rather than immediately replacing the whole session at five seconds. Require fresh frequency and mode readbacks before permitting new TX; retain the original five-second failure deadline and RF safeguards.
+- Keep audio-channel idle packets disabled. Add buffered-drain and real-UDP control-recovery regressions. On-air validation remains pending.
+
 ## 0.12.3 — 2026-11-22
 
 - Do not inject tracked empty idle packets into the audio channel. Retain audio-channel discovery and ping keepalives; the tracked stream contains audio payloads during TX.

@@ -11,7 +11,7 @@ from civ import encode_frequency
 
 
 class StreamNegotiation(unittest.TestCase):
-    def run_radio(self, refusal, audio_delay=0, tx_enabled=False):
+    def run_radio(self, refusal, audio_delay=0, tx_enabled=False, recover_civ=False):
         stop = threading.Event()
         errors, statuses, frames, state, requests = [], [], [], {}, []
         sockets = [socket.socket(socket.AF_INET, socket.SOCK_DGRAM) for _ in range(3)]
@@ -26,6 +26,8 @@ class StreamNegotiation(unittest.TestCase):
         audio_at = 0
         pcm_seq = 0
         audio_idles = []
+        suspended = reopened = False
+        open_count = 0
 
         def reply(sock, address, local, kind, body=b""):
             seq = seqs[sock]
@@ -35,7 +37,7 @@ class StreamNegotiation(unittest.TestCase):
             )
 
         def server():
-            nonlocal audio_at, pcm_seq, ready_after
+            nonlocal audio_at, pcm_seq, ready_after, suspended, reopened, open_count
             try:
                 with selectors.DefaultSelector() as selector:
                     for sock in sockets:
@@ -76,6 +78,10 @@ class StreamNegotiation(unittest.TestCase):
                                 reply(sock, addr, local, 0, body)
                             elif sock is control and kind == 0 and size == 144:
                                 requests.append(data[22:24])
+                                self.assertEqual(
+                                    struct.unpack_from(">I", data, 132)[0],
+                                    300 if tx_enabled else 0,
+                                )
                                 rates = struct.unpack_from(">II", data, 116)
                                 expected = 12000 if tx_enabled else 48000
                                 self.assertEqual(
@@ -96,9 +102,21 @@ class StreamNegotiation(unittest.TestCase):
                             elif (
                                 sock is cat
                                 and kind == 0
+                                and size == 22
+                                and data[16] == 0xC0
+                            ):
+                                open_count += 1
+                                if suspended and open_count > 1:
+                                    suspended = False
+                                    reopened = True
+                            elif (
+                                sock is cat
+                                and kind == 0
                                 and size > 26
                                 and data[16] == 0xC1
                             ):
+                                if suspended:
+                                    continue
                                 cmd = data[25:-1]
                                 payload = (
                                     b"\x03" + encode_frequency(7074000)
@@ -141,9 +159,16 @@ class StreamNegotiation(unittest.TestCase):
         worker.start()
 
         def sample(pcm):
+            nonlocal suspended
             frames.append(pcm)
             if state.get("frequency") and "mode" in state:
-                stop.set()
+                if recover_civ:
+                    if reopened and state.get("civ_recovered_at") is not None:
+                        stop.set()
+                    elif not reopened:
+                        suspended = True
+                else:
+                    stop.set()
 
         try:
             listen(
@@ -172,6 +197,10 @@ class StreamNegotiation(unittest.TestCase):
         self.assertEqual(len(requests), 2)
         self.assertNotEqual(requests[0], requests[1])
         self.assertIn("Radio busy; waiting to open stream", statuses)
+        if recover_civ:
+            self.assertGreaterEqual(open_count, 2)
+            self.assertIsNotNone(state.get("civ_recovered_at"))
+            self.assertFalse(state["civ_recovering"])
 
     def test_zero_port_busy_reply_retries_fresh_transaction(self):
         self.run_radio(0)
@@ -184,3 +213,6 @@ class StreamNegotiation(unittest.TestCase):
 
     def test_ft8_negotiates_native_twelve_khz_both_directions(self):
         self.run_radio(0, tx_enabled=True)
+
+    def test_stalled_civ_recovers_without_relogin_or_reopening_audio(self):
+        self.run_radio(0, tx_enabled=True, recover_civ=True)

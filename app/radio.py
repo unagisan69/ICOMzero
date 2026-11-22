@@ -18,6 +18,7 @@ from models import PROFILES, find_icom
 HEADER = struct.Struct("<IHHII")
 RATE = 48000
 FT8_RATE = 12000
+FT8_TX_BUFFER_MS = 300
 MODEL = "Network radio"
 CLIENT = b"ICOMzero"
 # Icom's positional substitution table for printable ASCII credentials.
@@ -413,7 +414,7 @@ def listen(
                         stream_rate if can_tx else 0,
                         cat_sock.getsockname()[1],
                         audio_sock.getsockname()[1],
-                        150 if can_tx else 0,
+                        FT8_TX_BUFFER_MS if can_tx else 0,
                     )
                     body[120] = 1
                     control.send(0, body=body, tracked=True)
@@ -599,6 +600,8 @@ def listen(
                                             lambda value: on_state("tx_status", value),
                                             rate=stream_rate,
                                             packet_ms=20,
+                                            drain_seconds=(FT8_TX_BUFFER_MS + 50)
+                                            / 1000,
                                             protection=civ.protection.check,
                                             off_confirmed=lambda: not civ.ptt_state
                                             and not civ.ptt_pending,

@@ -84,3 +84,26 @@ class LowRateTransport(unittest.TestCase):
         recording = bytes(12000) + pcm + bytes(360000 - 12000 - len(pcm))
         messages = {text for _, _, text in decode(recording)}
         self.assertIn("CQ K4TTL EM85", messages)
+
+    def test_radio_buffer_is_drained_before_ptt_off(self):
+        job = Job(bytes(24000), 100.5, 7074000)
+        jobs, commands = [job], []
+        pacer = Pacer(
+            lambda: jobs.pop() if jobs else None,
+            commands.append,
+            lambda _: None,
+            lambda _: True,
+            lambda: True,
+            lambda _: None,
+            rate=12000,
+            packet_ms=20,
+            drain_seconds=0.35,
+            off_confirmed=lambda: True,
+        )
+        for i in range(1841):
+            pacer.tick(100 + i * 0.001, 50 + i * 0.001)
+        self.assertFalse(job.done.is_set())
+        self.assertEqual(commands, [True])
+        pacer.tick(101.86, 51.86)
+        self.assertTrue(job.success)
+        self.assertEqual(commands[-1], False)
