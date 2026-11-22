@@ -27,6 +27,7 @@ DEFAULTS = {
     "tx_power_w": "10",
     "cq_period": "Even",
     "qso_beep": True,
+    "hide_worked": False,
     "wavelog_url": "",
     "wavelog_key": "",
     "wavelog_station": "",
@@ -92,7 +93,7 @@ def request(url, data, form=False):
                 "application/x-www-form-urlencoded" if form else "application/json"
             ),
             "Accept": "application/json",
-            "User-Agent": "ICOMzero/0.13.0",
+            "User-Agent": "ICOMzero/0.14.0-rc1",
         },
     )
     with urllib.request.urlopen(req, timeout=10) as response:
@@ -174,6 +175,9 @@ class Logbook:
                 "CREATE TABLE IF NOT EXISTS deliveries (id TEXT, service TEXT, state TEXT, error TEXT, PRIMARY KEY(id,service))"
             )
         os.chmod(self.path, 0o600)
+        from ft8history import WorkedHistory
+
+        self.worked_history = WorkedHistory(self.path)
         self.closed = threading.Event()
         self.wake = threading.Event()
         self.status = "Local log ready"
@@ -214,6 +218,10 @@ class Logbook:
                         "INSERT OR IGNORE INTO deliveries VALUES (?,?,?,?)",
                         (qso["id"], service, "pending", ""),
                     )
+        try:
+            self.worked_history.add_local(qso)
+        except (OSError, ValueError, sqlite3.Error):
+            self.worked_history.status = "Contact saved; worked history refresh needed"
         self.status = "Contact saved locally"
         self.wake.set()
         return True
@@ -233,6 +241,20 @@ class Logbook:
         return [f"{service}: {count} {state}" for service, state, count in rows] or [
             "No uploads queued"
         ]
+
+    @property
+    def history_status(self):
+        return self.worked_history.status
+
+    def worked_calls(self, band, settings=None):
+        return self.worked_history.calls(
+            settings if settings is not None else load_settings(), band
+        )
+
+    def sync_history(self, service, settings=None):
+        self.worked_history.sync(
+            service, settings if settings is not None else load_settings()
+        )
 
     def sync(self):
         self.wake.set()
@@ -311,3 +333,4 @@ class Logbook:
         self.closed.set()
         self.wake.set()
         self.thread.join(timeout=0.5)
+        self.worked_history.close()

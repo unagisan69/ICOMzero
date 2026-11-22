@@ -90,9 +90,10 @@ class SessionLog:
 class AutoCQ:
     """Explicit Auto CQ rounds, queued callers, and fresh CQ fallback targets."""
 
-    def __init__(self, sequence, emit=lambda *_, **__: None):
+    def __init__(self, sequence, emit=lambda *_, **__: None, worked=lambda _: False):
         self.sequence = sequence
         self.emit = emit
+        self.worked = worked
         self.active = False
         self.mode = "auto"
         self.own_cq_limit = 1
@@ -246,6 +247,7 @@ class AutoCQ:
                 for call, m in self.cqs.items()
                 if activation_cq(m)
                 and call not in self.completed
+                and not self.worked(call)
                 and now >= self.pota_cooldown.get(call, 0)
             ),
             key=lambda m: (m.slot, m.snr),
@@ -267,6 +269,14 @@ class AutoCQ:
 
     def _target(self, message, source):
         call, _ = call_fields(message)
+        if self.worked(call):
+            self.record(
+                "target_rejected",
+                call=call,
+                reason="previous_ft8_contact_on_band",
+                source=source,
+            )
+            return False
         if not self.automatic_call(call):
             self.record(
                 "target_rejected",
@@ -318,7 +328,9 @@ class AutoCQ:
             (
                 m
                 for c, m in self.cqs.items()
-                if c not in self.attempted and c not in self.completed
+                if c not in self.attempted
+                and c not in self.completed
+                and not self.worked(c)
             ),
             key=lambda m: (m.snr, m.slot),
             reverse=True,
@@ -374,6 +386,16 @@ class AutoCQ:
             and 200 <= message.hz <= 2800
         )
         eligible = valid and self.automatic_call(call)
+        if valid and call != s.partner and self.worked(call):
+            self.cqs.pop(call, None)
+            self.queue.pop(call, None)
+            self.record(
+                "rx_decode",
+                text=message.text,
+                decision="previous_ft8_contact_on_band",
+                call=call,
+            )
+            return
         if eligible and message.text.startswith("CQ ") and call not in self.completed:
             previous = self.cqs.get(call)
             if previous is None or (message.slot, message.snr) > (

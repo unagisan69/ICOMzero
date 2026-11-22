@@ -1000,6 +1000,7 @@ def ft8_ui(lcd, keyboard):
         "Test connections",
         "Sync pending",
         "Local log",
+        "Sync Log",
         "Back",
     ]
     fields = {
@@ -1011,6 +1012,8 @@ def ft8_ui(lcd, keyboard):
             ("TX power W", "tx_power_w"),
             ("CQ period", "cq_period"),
             ("QSO beep", "qso_beep"),
+            ("Hide previous contacts", "hide_worked"),
+            ("Sync Log", "sync_log"),
         ],
         "wavelog": [
             ("API URL", "wavelog_url"),
@@ -1154,7 +1157,9 @@ def ft8_ui(lcd, keyboard):
                 decoder.activate(False)
                 ready = False
             messages, status, progress = decoder.snapshot()
-            history.update(messages, settings["callsign"])
+            current_band = next((name for name, hz in bands if hz == dial), "")
+            worked = logbook.worked_calls(current_band, settings) if settings.get("hide_worked") else ()
+            history.update(messages, settings["callsign"], worked, getattr(station, "current_partner", ""))
             if (
                 held is not None
                 and now >= next_repeat
@@ -1187,6 +1192,7 @@ def ft8_ui(lcd, keyboard):
                     title = {
                         "menu": "FT8 Menu",
                         "logging": "Logging",
+                        "sync": "Sync Log",
                         "station": "Station settings",
                         "wavelog": "Wavelog",
                         "qrz": "QRZ",
@@ -1210,6 +1216,8 @@ def ft8_ui(lcd, keyboard):
                         subtitle = message_country(history.current()) + " · " + history.current().text
                     if panel == "manual":
                         subtitle = "Review exchanged reports, then save"
+                    if panel == "sync":
+                        subtitle = logbook.history_status
                     image, draw = menu_frame(display, title, subtitle[:43])
                     if panel in ("menu", "logging"):
                         items = list(menu_items) if panel == "menu" else log_items
@@ -1219,6 +1227,8 @@ def ft8_ui(lcd, keyboard):
                             items[2] = "Stop Auto CQ" + (f" ({station.queued_count} queued)" if getattr(station, "queued_count", 0) else "")
                         if panel == "menu" and getattr(station, "auto_active", False) and getattr(station, "automation_label", "AUTO") == "POTA":
                             items[3] = "Stop POTA Hunt"
+                    elif panel == "sync":
+                        items = ["Sync with Wavelog", "Sync with QRZ", "Back"]
                     elif panel == "help":
                         items = [
                             "F / Fn+F: previous decode",
@@ -1236,7 +1246,7 @@ def ft8_ui(lcd, keyboard):
                     else:
                         items = []
                         for label, key in fields[panel]:
-                            if key == "save":
+                            if key in ("save", "sync_log"):
                                 items.append(label)
                                 continue
                             value = (manual_form if panel == "manual" else settings)[
@@ -1421,6 +1431,8 @@ def ft8_ui(lcd, keyboard):
                             panel = None
                         elif panel == "logging":
                             show_panel("menu")
+                        elif panel == "sync":
+                            show_panel("station")
                         elif panel in ("wavelog", "qrz", "local"):
                             show_panel("logging")
                         else:
@@ -1435,7 +1447,7 @@ def ft8_ui(lcd, keyboard):
                                 else (
                                     max(1, len(logbook.recent()))
                                     if panel == "local"
-                                    else 6 if panel == "help" else len(fields[panel])
+                                    else 3 if panel == "sync" else 6 if panel == "help" else len(fields[panel])
                                 )
                             )
                         )
@@ -1536,8 +1548,18 @@ def ft8_ui(lcd, keyboard):
                                 logbook.sync()
                             elif action == "Local log":
                                 show_panel("local")
+                            elif action == "Sync Log":
+                                show_panel("sync")
                             else:
                                 show_panel("menu")
+                        elif panel == "sync":
+                            if choice == 2:
+                                show_panel("station")
+                            else:
+                                try:
+                                    logbook.sync_history(("wavelog", "qrz")[choice], dict(settings))
+                                except ValueError as error:
+                                    notify(error)
                         elif panel in fields:
                             field = fields[panel][choice][1]
                             if panel == "manual":
@@ -1555,6 +1577,8 @@ def ft8_ui(lcd, keyboard):
                                 else:
                                     original = manual_form[field]
                                     editing = True
+                            elif field == "sync_log":
+                                show_panel("sync")
                             elif isinstance(settings[field], bool):
                                 settings[field] = not settings[field]
                                 save_settings(settings)

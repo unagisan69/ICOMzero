@@ -156,13 +156,36 @@ class Station:
         self.saved_qso = None
         self.sequence = Sequencer(load_settings(), self.complete_contact)
         self.journal = None
-        self.auto = AutoCQ(self.sequence, self.audit)
+        self.auto = AutoCQ(self.sequence, self.audit, self.previously_worked)
         self.sounds = Sounds(
             lambda: receiver.radio_state.get("ptt") is False
             and not receiver.radio_state.get("ptt_pending")
         )
         self.thread = threading.Thread(target=self.run, daemon=True)
         self.thread.start()
+
+    @property
+    def current_partner(self):
+        s = self.sequence
+        return s.partner if s.enabled and s.stage not in ("cq", "monitor") else ""
+
+    def previously_worked(self, call, dial=None):
+        if (
+            not self.sequence.settings.get("hide_worked", False)
+            or call == self.current_partner
+        ):
+            return False
+        from ft8 import BANDS
+
+        band = next(
+            (
+                name
+                for name, hz in BANDS
+                if hz == (self.sequence.dial if dial is None else dial)
+            ),
+            "",
+        )
+        return call in self.logbook.worked_calls(band, self.sequence.settings)
 
     @property
     def auto_active(self):
@@ -354,6 +377,10 @@ class Station:
                     elif action == "cq":
                         self.sequence.cq(dial)
                     elif action == "reply":
+                        from ft8qso import call_fields
+
+                        if self.previously_worked(call_fields(value)[0], dial):
+                            raise ValueError("Already worked FT8 on this band")
                         self.sequence.reply(value, dial, self.decoder.snapshot()[0])
                     self.receiver.command(
                         "ft8_power", int(self.sequence.settings["tx_power_w"])

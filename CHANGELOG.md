@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.14.0-rc1 — 2026-11-22 (device preview)
+
+- Add Settings / Logging → Sync Log for private, incremental Wavelog or QRZ worked-history downloads. Keep imported history separate from contact upload queues.
+- Add Hide previous contacts, limited to FT8 on the current band. Filter the decode view and automated candidates while preserving active exchanges and own transmitted messages. New local QSOs update the index immediately.
+- Use paged background sync with resumable cursors, account-scoped indexes and cached local lookups. Keep the published App Store release at validated 0.13.0 during preview testing.
+
 ## 0.13.0 — 2026-11-22
 
 - Publish the validated FT8 reliability fixes to the App Store: continuous 12 kHz audio without empty tracked audio packets, 300 ms TX buffering with matching PTT drain, complete retransmission-range repair, and bounded CI-V recovery.

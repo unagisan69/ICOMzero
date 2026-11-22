@@ -85,21 +85,30 @@ class History:
         self.start = 0
         self.fingerprint = None
 
-    def update(self, messages, callsign):
+    def update(self, messages, callsign, worked=(), partner=""):
         fingerprint = (
             callsign,
             len(messages),
             messages[0].key if messages else None,
             messages[-1].key if messages else None,
+            worked,
+            partner,
         )
         if fingerprint == self.fingerprint:
             return
         self.fingerprint = fingerprint
+        from ft8qso import call_fields
+
         self.messages = sorted(
             [
                 m
                 for m in messages
-                if m.local_tx or m.text.startswith("CQ ") or m.involves(callsign)
+                if (m.local_tx or m.text.startswith("CQ ") or m.involves(callsign))
+                and (
+                    m.local_tx
+                    or call_fields(m)[0] == partner
+                    or call_fields(m)[0] not in worked
+                )
             ],
             key=lambda m: m.slot,
         )

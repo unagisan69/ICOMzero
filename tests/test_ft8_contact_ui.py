@@ -309,7 +309,7 @@ class PowerAndDisplay(unittest.TestCase):
 
 
 class SelectedMenus(unittest.TestCase):
-    def run_menu(self, manual=False, auto=False, pota=False, fault=False, initial=7074000, choose=False):
+    def run_menu(self, manual=False, auto=False, pota=False, fault=False, initial=7074000, choose=False, sync=False):
         from PIL import ImageFont
 
         module = runpy.run_path(
@@ -360,6 +360,10 @@ class SelectedMenus(unittest.TestCase):
 
         class Book:
             status = "Ready"
+            history_status = "Worked history ready"
+
+            def sync_history(self, service, settings):
+                actions.append((("sync_history", service), {}))
 
             def close(self):
                 pass
@@ -381,6 +385,8 @@ class SelectedMenus(unittest.TestCase):
                 pass
 
         keys = [33, 15] + ([45] * 7 if manual else [45] * (3 if pota else (2 if auto else 1))) + [28]
+        if sync:
+            keys = [15] + [45] * 4 + [28] + [45] * 8 + [28, 28, 1, 1, 1]
         if initial not in (7074000, 14074000):
             keys = [28, 1] if choose else [15, 1]
         if manual:
@@ -414,6 +420,10 @@ class SelectedMenus(unittest.TestCase):
             os.close(write)
         self.last_tunes = tunes
         return actions, rows
+
+    def test_settings_sync_menu_downloads_selected_provider(self):
+        actions, _ = self.run_menu(sync=True)
+        self.assertIn((("sync_history", "wavelog"), {}), actions)
 
     def test_selected_call_cq_routes_to_reply_not_fresh_cq(self):
         actions, rows = self.run_menu()
