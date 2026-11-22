@@ -83,7 +83,8 @@ class Channel:
         self.local = int.from_bytes(octets[2:], "big") << 16 | port
         self.remote = 0
         self.ready = False
-        self.seq = 0
+        # Sequence zero belongs to discovery; both reference clients start at one.
+        self.seq = 1
         self.history = OrderedDict()
         self.received = OrderedDict()
         self.missing = {}

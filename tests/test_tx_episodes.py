@@ -103,3 +103,47 @@ class TxEpisodes(unittest.TestCase):
         cat.receive("IF" + "0" * 26 + "0" + "0" * 8)
         self.assertFalse(cat.ptt_pending)
         self.assertIsNone(cat.protection.started)
+
+    def test_fast_tuner_completion_ends_age_guard_in_either_reply_order(self):
+        for order in (("ptt", "tuner"), ("tuner", "ptt")):
+            with self.subTest(order=order):
+                civ, _, _, state = fixtures.TransportSafety.make(self)
+                civ.tuning_requested = True
+                civ.tune_started = 10
+                civ.tune_seen_active = True
+                civ.tuner_state = 2
+                civ.ptt_state = True
+                civ.protection.begin(tuning=True, now=10)
+                for i, kind in enumerate(order):
+                    with patch("time.monotonic", return_value=10.4 + i * 0.05):
+                        if kind == "ptt":
+                            self.response(civ, 0)
+                        else:
+                            frame = bytes.fromhex("fefee0b61c0101fd")
+                            civ.receive(
+                                bytes(16)
+                                + b"\xc1"
+                                + struct.pack("<H", len(frame))
+                                + bytes(2)
+                                + frame
+                            )
+                    if i == 0:
+                        self.assertTrue(civ.tuning_requested)
+                self.assertFalse(civ.tuning_requested)
+                self.assertIsNone(civ.protection.started)
+                self.assertIsNone(civ.protection.check(14))
+                self.assertGreater(state["tune_completed_at"], 10)
+
+    def test_cached_pre_tune_rx_cannot_disarm_live_tuner_protection(self):
+        civ, _, _, _ = fixtures.TransportSafety.make(self)
+        civ.tuning_requested = civ.tune_seen_active = True
+        civ.tune_started = 10
+        civ.ptt_at = 9
+        civ.ptt_state = False
+        civ.tuner_at = 10.4
+        civ.tuner_state = 1
+        civ.protection.begin(tuning=True, now=10)
+        with patch("time.monotonic", return_value=10.45):
+            civ.finish_tuner_if_idle()
+        self.assertTrue(civ.tuning_requested)
+        self.assertIn("telemetry lost", civ.protection.check(13.01))

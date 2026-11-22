@@ -208,6 +208,24 @@ class Civ:
             and all(self.controls.get(name) == 0 for name in self.tx_controls)
         )
 
+    def finish_tuner_if_idle(self):
+        # A real tuner cycle can finish in less than 600 ms. Both tuner and
+        # PTT must have replied since this start; cached RX cannot end a carrier.
+        if (
+            self.tuning_requested
+            and self.tune_started is not None
+            and self.tuner_at >= self.tune_started
+            and self.ptt_at >= self.tune_started
+            and not self.ptt_state
+            and not self.ptt_pending
+            and self.tuner_state in (0, 1)
+            and (self.tune_seen_active or time.monotonic() - self.tune_started > 0.6)
+            and (self.tuner_state == 1 or self.tune_seen_active)
+        ):
+            self.tuning_requested = False
+            self.protection.end()
+            self.on_state("tune_completed_at", time.monotonic())
+
     def cancel_tuner(self):
         active = self.tuner_state == 2 or (
             self.tuning_requested and self.tune_started is not None
@@ -581,6 +599,7 @@ class Civ:
                     and self.tuner_state != 2
                 ):
                     self.protection.end()
+                self.finish_tuner_if_idle()
                 self.on_state("ptt_readback_at", self.ptt_at)
                 self.on_state("ptt_pending", self.ptt_pending)
                 self.on_state("ptt", self.ptt_state)
@@ -607,15 +626,7 @@ class Civ:
                 self.on_state("tuner", command[2])
                 self.on_state("tuner_at", self.tuner_at)
                 self.on_state("tune_seen_active", self.tune_seen_active)
-                if (
-                    self.tuning_requested
-                    and self.tune_started is not None
-                    and time.monotonic() - self.tune_started > 0.6
-                    and (command[2] == 1 or (command[2] == 0 and self.tune_seen_active))
-                    and not self.ptt_state
-                ):
-                    self.tuning_requested = False
-                    self.protection.end()
+                self.finish_tuner_if_idle()
             elif command.startswith(b"\x27\x00\x00") and not self.tx_enabled:
                 result = self.scope.parse(command[3:])
                 if result:

@@ -51,6 +51,11 @@ class PacketRecovery(unittest.TestCase):
         self.assertIsNone(self.channel.receive())
         self.assertFalse(self.channel.missing)
 
+    def test_tracked_transmission_starts_at_reference_sequence_one(self):
+        self.channel.send(0, body=b"first", tracked=True)
+        self.channel.send(0, body=b"second", tracked=True)
+        self.assertEqual([HEADER.unpack_from(p)[2] for p in self.socket.sent], [1, 2])
+
     def test_untracked_zero_idle_cannot_hide_login_sequence_zero(self):
         self.packet(0, b"")
         self.channel.receive()

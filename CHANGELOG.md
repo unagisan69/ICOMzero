@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.12.2 — 2026-11-22
+
+- End tuner telemetry protection on a confirmed completed cycle even when it finishes within 600 ms. Require fresh tuner and PTT/RX readbacks, support either reply order, and keep the guard active when RX is only cached.
+- Start tracked UDP sequence numbers at one, matching wfview and FT8TW discovery/session conventions.
+- Keep the experimental 12 kHz audio and staggered polling configuration. On-air audio reliability remains unresolved; local waveform decoding does not establish successful radio modulation.
+
 ## 0.12.1 — 2026-11-21
 
 - Use native 12 kHz mono PCM for Icom FT8 receive/transmit and 20 ms TX packets; preserve 48 kHz radio listening. Decode incoming 12 kHz audio directly and encode TX at the negotiated rate.
