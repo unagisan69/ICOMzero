@@ -19,6 +19,8 @@ HEADER = struct.Struct("<IHHII")
 RATE = 48000
 FT8_RATE = 12000
 FT8_TX_BUFFER_MS = 300
+STREAM_RECOVERY_SECONDS = 90
+STREAM_RETRY_SECONDS = (2, 4, 8)
 MODEL = "Network radio"
 CLIENT = b"ICOMzero"
 # Icom's positional substitution table for printable ASCII credentials.
@@ -230,6 +232,13 @@ class Channel:
                 break
 
 
+def route_address(address, port):
+    """Ask the kernel for the current source address; UDP connect sends no data."""
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+        probe.connect((address, port))
+        return probe.getsockname()[0]
+
+
 def listen(
     host,
     port,
@@ -297,6 +306,8 @@ def listen(
             return channel
 
         control = connect(bind(), port)
+        local_address = control.sock.getsockname()[0]
+        network_check_at = time.monotonic() + 0.5
         cat_sock, audio_sock = bind(), bind()
         cat = audio = civ = pacer = None
         audio_tx_seq = 0
@@ -350,6 +361,12 @@ def listen(
                     if civ is not None:
                         on_state("civ_reply_at", civ.last_control)
                     telemetry_at = now + 0.25
+                if now >= network_check_at:
+                    if route_address(address, port) != local_address:
+                        raise ConnectionLost(
+                            "Local network address changed; reconnecting"
+                        )
+                    network_check_at = now + 0.5
                 if now > deadline:
                     raise ConnectionLost(
                         "Audio stream timed out"
@@ -432,7 +449,7 @@ def listen(
                     stream_requested = True
                     stream_attempts += 1
                     if stream_wait_until is None:
-                        stream_wait_until = now + 30
+                        stream_wait_until = now + STREAM_RECOVERY_SECONDS
                     phase_packet = control.history[(control.seq - 1) & 0xFFFF]
                     phase_retry = now + 0.8
                     phase_attempts = 0
@@ -544,7 +561,7 @@ def listen(
                                     raise ConnectionLost(
                                         "Radio disconnected the stream"
                                     )
-                                if stream_attempts >= 4 or now >= stream_wait_until:
+                                if now >= stream_wait_until:
                                     raise ConnectionLost(
                                         f"Radio refused stream (0x{error:08x}, ports {ports[0]}/{ports[1]})"
                                     )
@@ -552,8 +569,14 @@ def listen(
                                 # a fresh stream transaction, not a replay of the
                                 # already-refused packet or a new login storm.
                                 stream_requested = False
-                                stream_retry_at = now + min(
-                                    4, 2 ** (stream_attempts - 1)
+                                stream_retry_at = (
+                                    now
+                                    + STREAM_RETRY_SECONDS[
+                                        min(
+                                            stream_attempts - 1,
+                                            len(STREAM_RETRY_SECONDS) - 1,
+                                        )
+                                    ]
                                 )
                                 phase_packet = None
                                 deadline = min(stream_wait_until, stream_retry_at + 8)

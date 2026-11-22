@@ -18,6 +18,7 @@ class StreamNegotiation(unittest.TestCase):
         tx_enabled=False,
         recover_civ=False,
         repair_range=False,
+        refusals=1,
     ):
         stop = threading.Event()
         errors, statuses, frames, state, requests = [], [], [], {}, []
@@ -119,7 +120,7 @@ class StreamNegotiation(unittest.TestCase):
                                     rates, (expected, expected if tx_enabled else 0)
                                 )
                                 body = bytearray(64)
-                                if len(requests) == 1:
+                                if len(requests) <= refusals:
                                     body[32:36] = refusal.to_bytes(4, "big")
                                 else:
                                     struct.pack_into(
@@ -230,7 +231,7 @@ class StreamNegotiation(unittest.TestCase):
             audio_idles, [], "Audio transport injected tracked empty packets"
         )
         self.assertEqual(state.get("frequency"), 7074000)
-        self.assertEqual(len(requests), 2)
+        self.assertEqual(len(requests), refusals + 1)
         self.assertNotEqual(requests[0], requests[1])
         self.assertIn("Radio busy; waiting to open stream", statuses)
         if repair_range:
@@ -243,6 +244,22 @@ class StreamNegotiation(unittest.TestCase):
 
     def test_zero_port_busy_reply_retries_fresh_transaction(self):
         self.run_radio(0)
+
+    def test_old_session_can_refuse_more_than_four_times_then_release(self):
+        from unittest.mock import patch
+
+        with patch("radio.STREAM_RETRY_SECONDS", (0.02, 0.04, 0.08)):
+            self.run_radio(0xFFFFFFFD, refusals=6)
+
+    def test_source_address_change_aborts_old_session(self):
+        from unittest.mock import patch
+        from radio import ConnectionLost
+
+        with patch("radio.route_address", return_value="192.0.2.99"):
+            with self.assertRaisesRegex(
+                ConnectionLost, "Local network address changed"
+            ):
+                self.run_radio(0)
 
     def test_explicit_refusal_can_recover_without_relogin(self):
         self.run_radio(0xFFFFFFFF)

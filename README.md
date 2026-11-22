@@ -27,12 +27,12 @@ Connect the Cardputer to a network that can reach the radio and enable the radio
 For manual installation, download the `.deb` from [GitHub Releases](https://github.com/unagisan69/ICOMzero/releases), then install it on the Cardputer.
 
 ```sh
-sudo apt install ./icomzero_0.14.0-1_arm64.deb
+sudo apt install ./icomzero_0.14.1-1_arm64.deb
 ```
 
 Open **ICOMzero** from APPLaunch after installation.
 
-Version 0.14.0 includes the hardware-validated IC-7300MK2 FT8 reliability updates: continuous 12 kHz audio, a 300 ms transmit buffer with matching PTT drain, complete packet-loss repair, and bounded control recovery. The FT8 status bar keeps the armed dot and TX/SWR/power indicators without AUTO or POTA text labels. Successful contacts are saved locally and uploaded independently to enabled logging services. Radio listening remains at 48 kHz. Compare the radio’s own power/SWR/ALC meters with the app; nominal power is a control setting, not a guarantee of measured RF output.
+Version 0.14.1 includes the hardware-validated IC-7300MK2 FT8 reliability updates: continuous 12 kHz audio, a 300 ms transmit buffer with matching PTT drain, complete packet-loss repair, and bounded control recovery. The FT8 status bar keeps the armed dot and TX/SWR/power indicators without AUTO or POTA text labels. Successful contacts are saved locally and uploaded independently to enabled logging services. Radio listening remains at 48 kHz. Compare the radio’s own power/SWR/ALC meters with the app; nominal power is a control setting, not a guarantee of measured RF output.
 
 ## Listen
 
@@ -87,7 +87,7 @@ The footer distinguishes a **red dot** (contact/CQ sequence enabled, including r
 
 **RF protection:** SWR strictly above 2.0 stops FT8 audio and requests PTT-off/tuner-stop, with a latched warning. ALC at the model’s redline, or above 20% of that redline for 0.3 seconds, also stops FT8; reduce TX audio level before restarting. FT8 meter queries are staggered at 100 ms intervals, reading each meter every 500 ms. Missing SWR/ALC telemetry after a two-second startup/staleness limit stops FT8 transmission. Confirmed RX ends that RF episode’s meter-age timer; the following transmission starts a new timer when PTT-on is sent. Receive intervals and a pending unsent PTT request do not reuse the preceding frame’s telemetry deadline. Internal tuner cycles have a three-second SWR telemetry startup/staleness limit to accommodate tuning pauses; a fresh SWR above 2.0 still stops immediately. The radio’s internal tuner carrier uses the SWR guard but is exempt from external-audio ALC checks. Consequently automatic tuning can abort when the initial match exceeds 2.0. Correct the cause, then press **Enter** on the warning to request clearance and explicitly restart tuning or the contact. Enter cannot also start a reply while a warning is present. The old Tab → Clear warning menu item is removed. Clearing waits for fresh receive/tuner readback and does not restart transmission. RF faults write bounded, private meter-age diagnostics to `~/.config/icomzero/rf-diagnostics.jsonl`; credentials and decoded traffic are excluded. These network-polled guards supplement the radio’s own protection and cannot guarantee instantaneous RF cutoff if connectivity fails.
 
-Unused network spectrum output is disabled during FT8 and restored on exit, leaving the radio’s own scope display untouched. Speaker audio stays disabled in FT8. Raw audio reaches a bounded capture worker before volume/mute processing. The network thread only enqueues PCM with its arrival timestamp; filtering and decoder locks cannot block its audio pacing and meter service. Capture overruns discard queued backlog and reset alignment instead of joining discontinuous samples. Packet drains also yield after a three-millisecond work budget, and private diagnostics record transport-loop gaps over 80 ms. Unchanged decode rows are cached while TX progress and meters continue to redraw. Reception stays aligned to 15-second periods. An early decode pass near 14 seconds prepares timely replies; a full-period pass can add late signals without duplicating rows. Receiver NR is disabled for FT8; keep noise blanker and notch filters off for best decoding. The app restores prior frequency, mode, NR and transmit modulation settings on a normal exit. It avoids restoring transmit inputs while PTT remains unconfirmed.
+Unused network spectrum output is disabled during FT8 and restored on exit, leaving the radio’s own scope display untouched. Speaker audio stays disabled in FT8. Raw audio reaches a bounded capture worker before volume/mute processing. The network thread only enqueues PCM with its arrival timestamp; filtering and decoder locks cannot block its audio pacing and meter service. Capture overruns discard queued backlog and reset alignment instead of joining discontinuous samples. Packet drains also yield after a three-millisecond work budget, and private diagnostics record transport-loop gaps over 80 ms. Unchanged decode rows are cached while TX progress and meters continue to redraw. Reception stays aligned to 15-second periods. An early decode pass near 14 seconds prepares timely replies; a full-period pass can add late signals without duplicating rows. Receiver NR is disabled for FT8; keep noise blanker and notch filters off for best decoding. A changed local route address reopens the transport. If the radio temporarily refuses a stream after a dropped session, reconnection waits up to 90 seconds with requests spaced two to eight seconds apart, using the same authenticated session. Recovery leaves transmission stopped until explicitly restarted. The app restores prior frequency, mode, NR and transmit modulation settings on a normal exit. It avoids restoring transmit inputs while PTT remains unconfirmed.
 
 ### Logging
 
@@ -114,7 +114,7 @@ sudo apt install build-essential python3-pil python3-numpy
 make check
 make test
 make package
-sudo apt install ./build/icomzero_0.14.0-1_arm64.deb
+sudo apt install ./build/icomzero_0.14.1-1_arm64.deb
 ```
 
 Use `make package APPBUILDER=/path/to/AppBuilder` for another checkout location. The package includes a foreground APPLaunch entry and declares its Python, Pillow, NumPy, font, ALSA, and PipeWire dependencies.

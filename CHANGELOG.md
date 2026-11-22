@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.14.1 — 2026-11-22
+
+- Detect a changed local route address and reopen the radio transport instead of keeping sockets from the previous address. Cancel ongoing transmission through the existing disconnect path.
+- Wait up to 90 seconds for a refused Icom stream to become available, using fresh requests on one authenticated session and a capped eight-second retry interval instead of four rapid failures and repeated logins.
+- Preserve explicit restart requirements and PTT/RF guards; recovery does not automatically restart Auto CQ or tuning.
+
 ## 0.14.0 — 2026-11-22
 
 - Add Settings / Logging → Sync Log for private, incremental Wavelog or QRZ worked-history downloads. Keep imported history separate from contact upload queues.
