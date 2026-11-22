@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.16.1 — 2026-11-22
+
+- Tighten CW tone concentration thresholds to reject 250/500 Hz filtered receiver noise without losing the generated noisy 8–35 WPM test messages. Add a filtered-noise regression.
+
 ## 0.16.0 — 2026-11-22
 
 - Add receive-only CW/CW-R Morse decoding to Radio. W enters/leaves CW, and S → Mode selects LSB/USB/CW/CW-R. Start decoding only after the radio confirms CW mode; pause on disconnect, tuning or PTT.

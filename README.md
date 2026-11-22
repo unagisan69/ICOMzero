@@ -27,12 +27,12 @@ Connect the Cardputer to a network that can reach the radio and enable the radio
 For manual installation, download the `.deb` from [GitHub Releases](https://github.com/unagisan69/ICOMzero/releases), then install it on the Cardputer.
 
 ```sh
-sudo apt install ./icomzero_0.16.0-1_arm64.deb
+sudo apt install ./icomzero_0.16.1-1_arm64.deb
 ```
 
 Open **ICOMzero** from APPLaunch after installation.
 
-Version 0.16.0 includes the hardware-validated IC-7300MK2 FT8 reliability updates: continuous 12 kHz audio, a 300 ms transmit buffer with matching PTT drain, complete packet-loss repair, and bounded control recovery. The FT8 status bar keeps the armed dot and TX/SWR/power indicators without AUTO or POTA text labels. Successful contacts are saved locally and uploaded independently to enabled logging services. Radio listening remains at 48 kHz. Compare the radio’s own power/SWR/ALC meters with the app; nominal power is a control setting, not a guarantee of measured RF output.
+Version 0.16.1 includes the hardware-validated IC-7300MK2 FT8 reliability updates: continuous 12 kHz audio, a 300 ms transmit buffer with matching PTT drain, complete packet-loss repair, and bounded control recovery. The FT8 status bar keeps the armed dot and TX/SWR/power indicators without AUTO or POTA text labels. Successful contacts are saved locally and uploaded independently to enabled logging services. Radio listening remains at 48 kHz. Compare the radio’s own power/SWR/ALC meters with the app; nominal power is a control setting, not a guarantee of measured RF output.
 
 ## Listen
 
@@ -134,7 +134,7 @@ sudo apt install build-essential python3-pil python3-numpy
 make check
 make test
 make package
-sudo apt install ./build/icomzero_0.16.0-1_arm64.deb
+sudo apt install ./build/icomzero_0.16.1-1_arm64.deb
 ```
 
 Use `make package APPBUILDER=/path/to/AppBuilder` for another checkout location. The package includes a foreground APPLaunch entry and declares its Python, Pillow, NumPy, font, ALSA, and PipeWire dependencies.

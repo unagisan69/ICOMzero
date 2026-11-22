@@ -92,6 +92,18 @@ class CW(unittest.TestCase):
         ):
             self.assertEqual(self.decode(pcm)["text"].strip(), "")
 
+    def test_filtered_receiver_noise_does_not_decode_as_letters(self):
+        for bandwidth in (250, 500):
+            n = 48000 * 8
+            rng = np.random.default_rng(315)
+            spectrum = np.fft.rfft(rng.normal(0, 1, n))
+            hz = np.fft.rfftfreq(n, 1 / 48000)
+            spectrum[(hz < 600 - bandwidth / 2) | (hz > 600 + bandwidth / 2)] = 0
+            noise = np.fft.irfft(spectrum, n)
+            noise = noise / np.std(noise) * 0.05
+            pcm = (np.clip(noise, -1, 1) * 32767).astype("<i2").tobytes()
+            self.assertEqual(self.decode(pcm)["text"].strip(), "", bandwidth)
+
     def test_unkeyed_carrier_has_no_speed_estimate(self):
         pcm = (
             0.3 * np.sin(2 * np.pi * 600 * np.arange(48000 * 3) / 48000) * 32767

@@ -198,7 +198,7 @@ class Core:
             if self.pitch is None or self.clock - self.signal_at > 2:
                 if (
                     power[peak] / noise > 30
-                    and power[max(0, peak - 1) : peak + 2].sum() / total > 0.65
+                    and power[max(0, peak - 1) : peak + 2].sum() / total > 0.85
                     and rms > 0.0001
                 ):
                     self.pitch = float(self.bins[peak])
@@ -210,7 +210,7 @@ class Core:
                 keyed = (
                     carrier / noise > (10 if self.timing.down else 16)
                     and carrier > self.level * (0.025 if self.timing.down else 0.05)
-                    and carrier / total > (0.3 if self.timing.down else 0.45)
+                    and carrier / total > (0.65 if self.timing.down else 0.8)
                     and rms > 0.0001
                 )
                 if keyed:
