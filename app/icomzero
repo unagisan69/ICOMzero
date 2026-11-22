@@ -47,6 +47,27 @@ KEYS = {
 SHIFTED = dict(zip("1234567890-=;',./[]\x60\\", "!@#$%^&*()_+:\"<>?{}~|"))
 
 
+# Stock tca8418_keypad_m5stack_keymap.map: symbol-layer events are already
+# translated by the Cardputer driver, not ordinary US punctuation keycodes.
+CARDPUTER_SYMBOLS = {
+    26: "!", 27: "@", 39: "#", 40: "$", 41: "%", 43: "^",
+    51: "&", 52: "*", 53: "(", 94: ")",
+    55: "~", 69: "`", 70: "_", 71: "-", 72: "+", 73: "=",
+    74: "[", 75: "]", 76: "{", 77: "}",
+    79: ";", 80: ":", 81: "'", 82: '"', 83: "<", 85: ">",
+    86: "\\", 89: "|", 90: ",", 91: ".", 92: "/", 93: "?",
+}
+
+
+def text_character(key, shift=False):
+    if key in CARDPUTER_SYMBOLS:
+        return CARDPUTER_SYMBOLS[key]
+    char = KEYS.get(key)
+    if char is None:
+        return None
+    return SHIFTED.get(char, char.upper()) if shift else char
+
+
 def read_config():
     try:
         data = json.loads(CONFIG.read_text())
@@ -473,6 +494,7 @@ class Display:
                 wait = "Waiting for scope data" if status == "Receiving audio" else status
                 label(22, 91, wait, color=MUTED)
             label(12, 155, "Ent - ■" if busy else "Ent - ▶", "small", MUTED)
+            label(110, 155, "S - Settings", "small", MUTED)
             label(240, 155, "Tab - Help", "small", MUTED)
         if volume_visible:
             image = notice_popup(self, image, "Volume", f"{volume}%")
@@ -489,7 +511,7 @@ class Display:
                 ("Fn + S / D", "Volume down / up"),
                 ("Fn + A", "Mute / unmute"),
                 ("Enter", "Play / stop"),
-                ("S / Esc", "Setup / main menu"),
+                ("S / Esc", "Settings / main menu"),
             )
             for index, (key, action) in enumerate(shortcuts):
                 y = 33 + index * 12
@@ -574,7 +596,7 @@ def ui(lcd, keyboard):
                     continue
                 if pressed == 2:
                     continue
-                if help_open:
+                if help_open and key != 31:
                     if key in (1, 15):
                         help_open = False
                     continue
@@ -590,6 +612,14 @@ def ui(lcd, keyboard):
                     volume_until = time.monotonic() + 1.4
                     save_at = time.monotonic() + 0.3
                     continue
+                if key == 31 and not fn and selected is None:
+                    rx.stop.set()
+                    if rx.thread is not None:
+                        rx.thread.join(timeout=2)
+                    selected = 0
+                    help_open = False
+                    band = held_tune = None
+                    continue
                 if editing:
                     if key == 1:
                         values[selected], editing = original, False
@@ -602,10 +632,7 @@ def ui(lcd, keyboard):
                             selected, editing = None, False
                     elif key == 14:
                         values[selected] = values[selected][:-1]
-                    elif key in KEYS:
-                        char = KEYS[key]
-                        if shift:
-                            char = SHIFTED.get(char, char.upper())
+                    elif (char := text_character(key, shift)) is not None:
                         credential_limit = 99 if values[4] == "TS-890S" else 16
                         limit = (253, 5, credential_limit, credential_limit, 32, 5, 5)[selected]
                         if len(values[selected]) < limit and (selected not in (1, 5) or char.isdecimal()):
@@ -643,8 +670,6 @@ def ui(lcd, keyboard):
                     held_tune = None
                 elif key == 1:
                     return
-                elif key == 31 and not rx.busy():
-                    selected = 0
                 elif key in (44, 46, 105, 106):
                     rx.tune(steps=-1 if key in (44, 105) else 1)
                     held_tune = key
@@ -1385,9 +1410,7 @@ def ft8_ui(lcd, keyboard):
                             notify(error)
                     elif key == 14:
                         editing_values[field] = editing_values[field][:-1]
-                    elif key in KEYS:
-                        char = KEYS[key]
-                        char = SHIFTED.get(char, char.upper()) if shift else char
+                    elif (char := text_character(key, shift)) is not None:
                         if len(editing_values[field]) < 256:
                             editing_values[field] += char
                     continue

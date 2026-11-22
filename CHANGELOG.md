@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.14.2 — 2026-11-22
+
+- Fix #1: handle the stock Cardputer symbol-layer keycodes in radio setup and FT8 text fields. SYM+B enters a period; punctuation in radio credentials and logging URLs follows the shipped keymap.
+- Allow S to open radio settings while receiving, from the band chooser or from Help. Close the receive stream before editing connection settings; retain Fn+S volume control. Add an S - Settings footer hint.
+
 ## 0.14.1 — 2026-11-22
 
 - Detect a changed local route address and reopen the radio transport instead of keeping sockets from the previous address. Cancel ongoing transmission through the existing disconnect path.
