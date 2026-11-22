@@ -134,7 +134,7 @@ class WorkedHistoryTests(unittest.TestCase):
         history.update(messages, "K4TTL")
         self.assertEqual(history.messages, messages)
 
-    def test_automation_excludes_worked_cqs_and_callers(self):
+    def test_automation_excludes_worked_cqs_but_queues_direct_callers(self):
         from ft8auto import AutoCQ
         from ft8qso import Sequencer
 
@@ -145,7 +145,9 @@ class WorkedHistoryTests(unittest.TestCase):
             auto.receive(Message(100, 1500, "CQ W1AW FN31", -5))
             auto.receive(Message(100, 1500, "K4TTL W1AW FN31", -5))
             self.assertNotIn("W1AW", auto.cqs)
-            self.assertNotIn("W1AW", auto.queue)
+            self.assertIn("W1AW", auto.queue)
+            self.assertTrue(auto._queued(1500))
+            self.assertEqual(seq.partner, "W1AW")
             self.assertFalse(
                 auto._target(Message(100, 1500, "CQ W1AW FN31", -5), "fallback")
             )

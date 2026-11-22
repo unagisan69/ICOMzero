@@ -313,6 +313,28 @@ class QueueAndHunt(unittest.TestCase):
         self.assertEqual(self.auto.fallback_used, ["W1AW"])
         self.assertNotIn("W2XYZ", self.auto.cqs)
 
+    def test_previously_worked_direct_caller_completes_qso(self):
+        self.auto.worked = lambda call: call == "W1AW"
+        self.send(100)
+        self.receive(101, "K1ABC W1AW FN31")
+        self.assertEqual(self.seq.partner, "W1AW")
+        self.assertEqual(self.seq.stage, "report")
+        self.send(102)
+        self.receive(103, "K1ABC W1AW R-10")
+        self.send(104)
+        self.receive(105, "K1ABC W1AW 73")
+        self.assertEqual(len(self.saved), 1)
+        self.assertEqual(self.seq.stage, "cq")
+        # A completed station is still deduplicated within this Auto CQ session.
+        self.send(106)
+        self.receive(107, "K1ABC W1AW FN31")
+        self.assertNotIn("W1AW", self.auto.queue)
+        self.assertEqual(self.seq.stage, "cq")
+
+    def test_previously_worked_queued_caller_gets_priority(self):
+        self.auto.worked = lambda call: call == "W2XYZ"
+        self.test_queued_caller_gets_priority_after_logged_contact()
+
     def test_queued_caller_gets_priority_after_logged_contact(self):
         self.send(100)
         self.receive(101, "K1ABC W1AW FN31")

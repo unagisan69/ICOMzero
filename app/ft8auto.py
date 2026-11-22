@@ -269,7 +269,7 @@ class AutoCQ:
 
     def _target(self, message, source):
         call, _ = call_fields(message)
-        if self.worked(call):
+        if source != "queued" and self.worked(call):
             self.record(
                 "target_rejected",
                 call=call,
@@ -386,7 +386,13 @@ class AutoCQ:
             and 200 <= message.hz <= 2800
         )
         eligible = valid and self.automatic_call(call)
-        if valid and call != s.partner and self.worked(call):
+        addressed_to_us = len(parts) == 3 and parts[0] == own
+        if (
+            valid
+            and call != s.partner
+            and self.worked(call)
+            and not (self.mode == "auto" and addressed_to_us)
+        ):
             self.cqs.pop(call, None)
             self.queue.pop(call, None)
             self.record(

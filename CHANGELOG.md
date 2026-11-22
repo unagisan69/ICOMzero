@@ -1,10 +1,10 @@
 # Changelog
 
-## 0.14.0-rc1 — 2026-11-22 (device preview)
+## 0.14.0 — 2026-11-22
 
 - Add Settings / Logging → Sync Log for private, incremental Wavelog or QRZ worked-history downloads. Keep imported history separate from contact upload queues.
-- Add Hide previous contacts, limited to FT8 on the current band. Filter the decode view and automated candidates while preserving active exchanges and own transmitted messages. New local QSOs update the index immediately.
-- Use paged background sync with resumable cursors, account-scoped indexes and cached local lookups. Keep the published App Store release at validated 0.13.0 during preview testing.
+- Add Hide previous contacts, limited to FT8 on the current band. Filter the decode view and unsolicited automated CQ targets while preserving active exchanges and own transmitted messages. Auto CQ still answers or queues previously worked stations that call you. New local QSOs update the index immediately.
+- Use paged background sync with resumable cursors, account-scoped indexes and cached local lookups. Publish the operator-validated log-sync update to the App Store.
 
 ## 0.13.0 — 2026-11-22
 
