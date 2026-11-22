@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.13.0 — 2026-11-22
+
+- Publish the validated FT8 reliability fixes to the App Store: continuous 12 kHz audio without empty tracked audio packets, 300 ms TX buffering with matching PTT drain, complete retransmission-range repair, and bounded CI-V recovery.
+- Recognize fast confirmed tuner completion and use continuous readiness deadlines after successful transmissions; preserve RF safeguards and private diagnostics.
+- Remove the AUTO label from the FT8 status bar during Auto CQ. Keep the armed dot, TX/SWR/power indicators, POTA Hunt label and menu controls.
+- Verify continued operation and QSO logging on the IC-7300MK2; other radio profiles remain pending physical validation.
+
 ## 0.12.5 — 2026-11-22
 
 - Repair every packet in inclusive Icom retransmission ranges, including sequence wrap, rather than only their endpoints. Deduplicate overlapping ranges, bound repair bursts, and preserve idle placeholders for commands deliberately removed from replay history.
