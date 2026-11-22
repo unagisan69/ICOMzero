@@ -92,6 +92,8 @@ class Channel:
         self.closed = False
         self.last_received = None
         self.track_data = True
+        self.idle_enabled = True
+        self.ping_seq = 0
         self.next_repair = 0
         self.next_ping = self.next_idle = self.next_probe = 0
 
@@ -104,6 +106,8 @@ class Channel:
             self.history[seq] = data
             if len(self.history) > 512:
                 self.history.popitem(last=False)
+            # An idle means no tracked payload has been sent for 100 ms.
+            self.next_idle = time.monotonic() + 0.1
         with suppress(BlockingIOError):
             self.sock.send(data)
 
@@ -131,9 +135,9 @@ class Channel:
             self.next_probe = now + 0.5
         if self.remote and now >= self.next_ping:
             stamp = int(now * 1000) & 0xFFFFFFFF
-            self.send(7, body=struct.pack("<BI", 0, stamp))
+            self.send(7, self.ping_seq, body=struct.pack("<BI", 0, stamp))
             self.next_ping = now + 0.5
-        if self.remote and now >= self.next_idle:
+        if self.idle_enabled and self.remote and now >= self.next_idle:
             self.send(0, tracked=True)
             self.next_idle = now + 0.1
 
@@ -154,8 +158,11 @@ class Channel:
             self.closed = True
         if size == 16 and kind == 6:
             self.ready = True
-        if size == 21 and kind == 7 and data[16] == 0:
-            self.send(7, seq, b"\1" + data[17:])
+        if size == 21 and kind == 7:
+            if data[16] == 0:
+                self.send(7, seq, b"\1" + data[17:])
+            elif data[16] == 1 and seq == self.ping_seq:
+                self.ping_seq = (self.ping_seq + 1) & 0xFFFF
         if kind == 1:
             requested = (
                 (seq,)
@@ -268,12 +275,13 @@ def listen(
             sock.bind(("", 0))
             return sock
 
-        def connect(sock, remote_port, track_data=True):
+        def connect(sock, remote_port, track_data=True, idle_enabled=True):
             local_port = sock.getsockname()[1]
             sock.connect((address, remote_port))
             sock.setblocking(False)
             channel = Channel(sock, local_port)
             channel.track_data = track_data
+            channel.idle_enabled = idle_enabled
             selector.register(sock, selectors.EVENT_READ, channel)
             return channel
 
@@ -547,7 +555,10 @@ def listen(
                                 if cat_port and audio_port:
                                     cat = connect(cat_sock, cat_port)
                                     audio = connect(
-                                        audio_sock, audio_port, track_data=False
+                                        audio_sock,
+                                        audio_port,
+                                        track_data=False,
+                                        idle_enabled=False,
                                     )
                                     phase_packet = None
                                     deadline = now + 8

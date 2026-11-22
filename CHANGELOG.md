@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.12.3 — 2026-11-22
+
+- Do not inject tracked empty idle packets into the audio channel. Retain audio-channel discovery and ping keepalives; the tracked stream contains audio payloads during TX.
+- Restart control/CAT idle deadlines after real tracked payloads, matching reference-client idle semantics.
+- Advance ping sequence numbers on matching replies instead of repeatedly sending sequence zero.
+- Retain RF safeguards and the fast-tuner completion correction. Experimental on-air validation is still required.
+
 ## 0.12.2 — 2026-11-22
 
 - End tuner telemetry protection on a confirmed completed cycle even when it finishes within 600 ms. Require fresh tuner and PTT/RX readbacks, support either reply order, and keep the guard active when RX is only cached.

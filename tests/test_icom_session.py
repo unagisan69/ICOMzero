@@ -25,6 +25,7 @@ class StreamNegotiation(unittest.TestCase):
         ready_after = 0
         audio_at = 0
         pcm_seq = 0
+        audio_idles = []
 
         def reply(sock, address, local, kind, body=b""):
             seq = seqs[sock]
@@ -54,6 +55,8 @@ class StreamNegotiation(unittest.TestCase):
                                     ready_after = time.monotonic() + audio_delay
                             elif kind == 5:
                                 reply(sock, addr, local, 5)
+                            elif sock is audio and kind == 0 and size == 16:
+                                audio_idles.append(seq)
                             elif sock is control and kind == 0 and size == 128:
                                 body = bytearray(80)
                                 body[10:12] = data[26:28]
@@ -162,6 +165,9 @@ class StreamNegotiation(unittest.TestCase):
                 sock.close()
         self.assertFalse(errors, errors)
         self.assertTrue(frames)
+        self.assertEqual(
+            audio_idles, [], "Audio transport injected tracked empty packets"
+        )
         self.assertEqual(state.get("frequency"), 7074000)
         self.assertEqual(len(requests), 2)
         self.assertNotEqual(requests[0], requests[1])

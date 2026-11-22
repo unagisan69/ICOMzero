@@ -56,6 +56,63 @@ class PacketRecovery(unittest.TestCase):
         self.channel.send(0, body=b"second", tracked=True)
         self.assertEqual([HEADER.unpack_from(p)[2] for p in self.socket.sent], [1, 2])
 
+    def test_audio_channel_does_not_insert_empty_tracked_packets(self):
+        self.channel.idle_enabled = False
+        self.channel.remote = 7
+        self.channel.ready = True
+        for i in range(80):
+            now = i * 0.01
+            with patch("radio.time.monotonic", return_value=now):
+                self.channel.tick(now)
+                if i % 2 == 0:
+                    self.channel.send(0, body=b"pcm", tracked=True)
+        tracked = [p for p in self.socket.sent if HEADER.unpack_from(p)[1] == 0]
+        self.assertEqual(len(tracked), 40)
+        self.assertTrue(all(p[16:] == b"pcm" for p in tracked))
+        self.assertEqual(
+            [HEADER.unpack_from(p)[2] for p in tracked], list(range(1, 41))
+        )
+        self.assertTrue(any(HEADER.unpack_from(p)[1] == 7 for p in self.socket.sent))
+
+    def test_civ_idle_timer_restarts_when_a_real_payload_is_sent(self):
+        self.channel.remote = 7
+        self.channel.ready = True
+        with patch("radio.time.monotonic", return_value=10):
+            self.channel.send(0, body=b"civ", tracked=True)
+        self.channel.tick(10.09)
+        self.assertFalse(
+            any(
+                len(p) == 16 and HEADER.unpack_from(p)[1] == 0 for p in self.socket.sent
+            )
+        )
+        self.channel.tick(10.11)
+        self.assertTrue(
+            any(
+                len(p) == 16 and HEADER.unpack_from(p)[1] == 0 for p in self.socket.sent
+            )
+        )
+
+    def test_ping_sequence_advances_only_for_the_matching_reply(self):
+        self.channel.remote = 7
+        self.channel.ready = True
+        self.channel.idle_enabled = False
+        self.channel.tick(1)
+        first = next(p for p in self.socket.sent if HEADER.unpack_from(p)[1] == 7)
+        self.assertEqual(HEADER.unpack_from(first)[2], 0)
+        self.socket.incoming.append(
+            HEADER.pack(21, 7, 0, 7, self.channel.local) + b"\x01" + first[17:]
+        )
+        self.channel.receive()
+        self.assertEqual(self.channel.ping_seq, 1)
+        self.channel.tick(1.6)
+        last = self.socket.sent[-1]
+        self.assertEqual(HEADER.unpack_from(last)[1:3], (7, 1))
+        self.socket.incoming.append(
+            HEADER.pack(21, 7, 0, 7, self.channel.local) + b"\x01" + first[17:]
+        )
+        self.channel.receive()
+        self.assertEqual(self.channel.ping_seq, 1)
+
     def test_untracked_zero_idle_cannot_hide_login_sequence_zero(self):
         self.packet(0, b"")
         self.channel.receive()
