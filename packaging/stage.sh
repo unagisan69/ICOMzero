@@ -2,7 +2,7 @@
 set -eu
 chmod 755 "$STAGE"
 install -D -m 755 app/icomzero "$STAGE$APP_INSTALL_DIR/icomzero"
-install -m 644 app/radio.py app/civ.py app/models.py app/radios.json app/kenwood.py app/ft8.py app/ft8log.py app/ft8history.py app/ft8qso.py app/ft8station.py app/ft8tx.py app/meters.py app/ft8auto.py app/notifications.py app/countries.py app/us_states.py "$STAGE$APP_INSTALL_DIR/"
+install -m 644 app/radio.py app/civ.py app/models.py app/radios.json app/kenwood.py app/ft8.py app/ft8log.py app/ft8history.py app/profiles.py app/settings_ui.py app/version.py app/updater.py app/update_session.py app/update_install.py app/update_log.py app/ft8qso.py app/ft8station.py app/ft8tx.py app/meters.py app/ft8auto.py app/notifications.py app/countries.py app/us_states.py "$STAGE$APP_INSTALL_DIR/"
 install -m 644 vendor/us-states/states.sqlite3 "$STAGE$APP_INSTALL_DIR/states.sqlite3"
 install -D -m 644 vendor/us-states/README.md "$STAGE/usr/share/doc/icomzero/us-states-README.md"
 install -m 644 vendor/country-files/cty.dat "$STAGE$APP_INSTALL_DIR/cty.dat"
@@ -12,6 +12,7 @@ install -m 755 build/icomzero-ft8-decode build/icomzero-ft8-encode "$STAGE$APP_I
 install -D -m 644 vendor/ft8_lib/LICENSE "$STAGE/usr/share/doc/icomzero/ft8_lib-LICENSE"
 install -D -m 644 vendor/ft8_lib/fft/COPYING "$STAGE/usr/share/doc/icomzero/kissfft-COPYING"
 install -D -m 644 vendor/ft8_lib/fft/LICENSES/BSD-3-Clause "$STAGE/usr/share/doc/icomzero/kissfft-LICENSE"
+install -D -m 644 docs/meshcore-updater-LICENSE "$STAGE/usr/share/doc/icomzero/meshcore-updater-LICENSE"
 install -D -m 644 LICENSE "$STAGE/usr/share/doc/icomzero/copyright"
 install -D -m 644 CHANGELOG.md "$STAGE/usr/share/doc/icomzero/CHANGELOG.md"
 install -d "$STAGE/usr/bin"

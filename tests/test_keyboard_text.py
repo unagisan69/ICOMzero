@@ -29,76 +29,70 @@ class KeyboardText(unittest.TestCase):
         self.assertEqual(char(48, True), "B")
         self.assertIsNone(char(15))
 
-    def test_radio_setup_saves_ipv4_from_stock_symbol_events(self):
-        module = self.module
-        values = ["", "50001", "", "", "Auto (Icom)", "60001", "User"]
-        saved = []
-        keys = [28, 2, 10, 3, 91, 11, 91, 3, 91, 2, 3, 4, 28, 1, 1]
-        read, write = os.pipe()
-        try:
-            os.write(
-                write,
-                b"".join(
-                    module["EVENT"].pack(0, 0, 1, key, value)
-                    for key in keys
-                    for value in (1, 0)
-                ),
+    def test_profile_editor_saves_ipv4_from_stock_symbol_events(self):
+        import tempfile
+        from types import SimpleNamespace
+        from PIL import ImageFont
+        from profiles import ProfileStore
+        from settings_ui import SettingsScreens
+
+        font = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+        display = SimpleNamespace(
+            fonts={
+                k: ImageFont.truetype(font, n)
+                for k, n in (("small", 12), ("title", 22))
+            },
+            present=lambda image: None,
+        )
+        keys = iter([45, 28, 2, 10, 3, 91, 11, 91, 3, 91, 2, 3, 4, 28, 1])
+        with tempfile.TemporaryDirectory() as root:
+            store = ProfileStore(Path(root) / "radio.json")
+            screens = SettingsScreens(
+                display,
+                -1,
+                lambda _: [(next(keys), 1)],
+                self.module["text_character"],
+                store,
             )
-            with patch.dict(
-                module["ui"].__globals__,
-                {
-                    "Display": lambda _: Mock(),
-                    "load": lambda: list(values),
-                    "read_config": lambda: {},
-                    "save": lambda data, *args: saved.append(list(data)),
-                },
-            ):
-                module["ui"](-1, read)
-        finally:
-            os.close(read)
-            os.close(write)
-        self.assertEqual(len(saved), 1)
-        self.assertEqual(saved[0][0], "192.0.2.123")
-        self.assertEqual(saved[0][1:], values[1:])
+            screens.edit_radio("legacy")
+            self.assertEqual(store.config()["Host"], "192.0.2.123")
+            self.assertEqual(store.config()["Password"], "")
 
-    def test_s_opens_setup_while_receiving_and_stops_stream_before_edit(self):
+    def test_s_opens_radio_settings_and_changes_step_while_receiving(self):
+        import tempfile
+        from profiles import ProfileStore
+
         module = self.module
-        values = ["192.0.2.1", "50001", "", "", "Auto (Icom)", "60001", "User"]
-        saved = []
-        with patch.dict(
-            module["Receiver"].__init__.__globals__, {"read_config": lambda: {}}
-        ):
-            receiver = module["Receiver"]()
-        receiver.thread = Mock()
-        receiver.thread.is_alive.side_effect = lambda: not receiver.stop.is_set()
-
-        def save(data):
-            self.assertTrue(receiver.stop.is_set())
-            receiver.thread.join.assert_called()
-            saved.append(list(data))
-
-        keys = [31, 28, 14, 3, 28, 1, 1]
-        read, write = os.pipe()
-        try:
-            os.write(
-                write,
-                b"".join(
-                    module["EVENT"].pack(0, 0, 1, key, value)
-                    for key in keys
-                    for value in (1, 0)
-                ),
+        with tempfile.TemporaryDirectory() as root:
+            store = ProfileStore(Path(root) / "radio.json")
+            store.save_connection(
+                ["192.0.2.1", "50001", "", "", "Auto (Icom)", "60001", "User"]
             )
-            with patch.dict(
-                module["ui"].__globals__,
-                {
-                    "Display": lambda _: Mock(),
-                    "Receiver": lambda: receiver,
-                    "load": lambda: list(values),
-                    "save": save,
-                },
-            ):
-                module["ui"](-1, read)
-        finally:
-            os.close(read)
-            os.close(write)
-        self.assertEqual(saved[0][0], "192.0.2.2")
+            with patch.dict(module["ui"].__globals__, {"CONFIG": store.path}):
+                receiver = module["Receiver"]()
+                receiver.thread = Mock()
+                receiver.thread.is_alive.side_effect = (
+                    lambda: not receiver.stop.is_set()
+                )
+                keys = [31, 45, 28, 1, 1]
+                read, write = os.pipe()
+                try:
+                    os.write(
+                        write,
+                        b"".join(
+                            module["EVENT"].pack(0, 0, 1, key, value)
+                            for key in keys
+                            for value in (1, 0)
+                        ),
+                    )
+                    with patch.dict(
+                        module["ui"].__globals__,
+                        {"Display": lambda _: Mock(), "Receiver": lambda: receiver},
+                    ):
+                        module["ui"](-1, read)
+                finally:
+                    os.close(read)
+                    os.close(write)
+            self.assertEqual(receiver.step, 500)
+            self.assertEqual(store.active()["step"], 500)
+            self.assertEqual(receiver.volume, 60)

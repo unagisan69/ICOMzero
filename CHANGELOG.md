@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.15.0 — 2026-11-22
+
+- Redesign the startup menu with Radio, FT8 and Settings icon cards, the active radio name and app version.
+- Move connection setup to Settings → Radios. Add named radio profiles with selection, editing, cloning and deletion; migrate the legacy connection privately without discarding volume/mute or logging preferences. Pin each live connection to its selected profile.
+- Make Radio → S a radio-only menu for Band and 1000/500/100 Hz tuning steps. Persist the step per profile and apply it to tap/hold tuning.
+- Add bounded background GitHub checks at launch, an optional startup-check preference, manual updates, download/installation progress, checksum and package validation, administrator-password entry and explicit restart. Adapt the MIT-licensed MeshCore Zero updater and retain its license.
+- Consume nested-menu input events individually so keystrokes are not lost across screen transitions. Preserve radio/FT8 RF protections.
+
 ## 0.14.2 — 2026-11-22
 
 - Fix #1: handle the stock Cardputer symbol-layer keycodes in radio setup and FT8 text fields. SYM+B enters a period; punctuation in radio credentials and logging URLs follows the shipped keymap.

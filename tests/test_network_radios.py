@@ -194,33 +194,62 @@ class Kenwood(unittest.TestCase):
 
 
 class SetupMigration(unittest.TestCase):
-    def test_model_selection_from_the_existing_four_field_setup(self):
-        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"XDG_CONFIG_HOME": directory}):
-            module = runpy.run_path(str(Path(__file__).resolve().parents[1] / "app/icomzero"))
-            config = module["CONFIG"]
-            config.parent.mkdir()
-            config.write_text(json.dumps({
-                "Host": "192.0.2.1", "Control port": "50001", "Username": "test",
-                "Password": "testpass", "volume": 35, "muted": True,
-            }))
-            self.assertEqual(module["load"]()[4:], ["Auto (Icom)", "60001", "User"])
-            class Display:
-                def __init__(self, _):
-                    pass
-                def render(self, *_):
-                    pass
-            read, write = os.pipe()
-            try:
-                # S opens Setup, four arrows reach Radio, nine presses choose TS-890S.
-                keys = [31, 108, 108, 108, 108, *([28] * 9), 108, 108, 28, 1, 1]
-                event = module["EVENT"]
-                os.write(write, b"".join(event.pack(0, 0, 1, key, 1) for key in keys))
-                with patch.dict(module["ui"].__globals__, {"Display": Display}):
-                    module["ui"](-1, read)
-            finally:
-                os.close(read)
-                os.close(write)
-            data = json.loads(config.read_text())
+    def test_model_selection_migrates_existing_four_field_connection(self):
+        from PIL import ImageFont
+        from types import SimpleNamespace
+        from settings_ui import SettingsScreens
+        from profiles import ProfileStore
+        from models import RADIO_CHOICES
+
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory) / "radio.json"
+            config.write_text(
+                json.dumps(
+                    {
+                        "Host": "192.0.2.1",
+                        "Control port": "50001",
+                        "Username": "test",
+                        "Password": "testpass",
+                        "volume": 35,
+                        "muted": True,
+                    }
+                )
+            )
+            module = runpy.run_path(
+                str(Path(__file__).resolve().parents[1] / "app/icomzero")
+            )
+            store = ProfileStore(config)
+            self.assertEqual(store.config()["Radio"], "Auto (Icom)")
+            font = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+            display = SimpleNamespace(
+                fonts={
+                    k: ImageFont.truetype(font, n)
+                    for k, n in (("small", 12), ("title", 22))
+                },
+                present=lambda _: None,
+            )
+            keys = iter(
+                [
+                    *([45] * 5),
+                    28,
+                    *([45] * RADIO_CHOICES.index("TS-890S")),
+                    28,
+                    45,
+                    45,
+                    28,
+                    45,
+                    28,
+                    1,
+                ]
+            )
+            SettingsScreens(
+                display,
+                -1,
+                lambda _: [(next(keys), 1)],
+                module["text_character"],
+                store,
+            ).edit_radio("legacy")
+            data = store.config()
             self.assertEqual(data["Radio"], "TS-890S")
             self.assertEqual(data["Control port"], "60000")
             self.assertEqual(data["Login"], "Admin")

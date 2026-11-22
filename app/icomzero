@@ -23,9 +23,10 @@ from PIL import Image, ImageDraw, ImageFont
 from countries import message_country, activation_cq, short_country
 from models import MIN_HZ, MAX_HZ, DEFAULT_PROFILE, PROFILES, RADIO_CHOICES, presets
 from radio import FT8_RATE, RATE, RadioError, ConnectionLost, encode, listen
+from profiles import ProfileStore, FIELDS, DEFAULTS, STEPS
+from version import VERSION
+from settings_ui import RestartApp
 
-FIELDS = ("Host", "Control port", "Username", "Password", "Radio", "Audio port", "Login")
-DEFAULTS = ("", "50001", "", "", "Auto (Icom)", "60001", "User")
 CONFIG = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "icomzero/radio.json"
 SPEAKER = "pulse"
 SPEAKER_SINK = "alsa_output.platform-sound.stereo-fallback"
@@ -69,28 +70,11 @@ def text_character(key, shift=False):
 
 
 def read_config():
-    try:
-        data = json.loads(CONFIG.read_text())
-        return data if isinstance(data, dict) else {}
-    except (OSError, ValueError):
-        return {}
+    return ProfileStore(CONFIG).config()
 
 
 def save(values, volume=None, muted=None):
-    data = read_config()
-    data.update(zip(FIELDS, values))
-    if volume is not None:
-        data["volume"] = volume
-    if muted is not None:
-        data["muted"] = muted
-    CONFIG.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(mode="w", dir=CONFIG.parent, delete=False) as temp:
-        try:
-            json.dump(data, temp)
-            temp.flush()
-            os.replace(temp.name, CONFIG)
-        finally:
-            Path(temp.name).unlink(missing_ok=True)
+    ProfileStore(CONFIG).save_connection(values, volume, muted)
 
 
 def load():
@@ -125,6 +109,8 @@ class Receiver:
         self.status = "Disconnected"
         data = read_config()
         volume = data.get("volume", 60)
+        self.step = data.get("step", TUNE_STEP)
+        self.session_config = data
         self.volume = volume if type(volume) is int and 0 <= volume <= 100 else 60
         self.muted = data.get("muted") is True
         self.packets = self.written = self.dropped = 0
@@ -152,6 +138,7 @@ class Receiver:
             self.report(status)
 
     def start(self, settings):
+        self.session_config = read_config()
         self.packets = self.written = self.dropped = 0
         self.frequency = self.scope = None
         self.target = self.tune_queue = None
@@ -229,10 +216,10 @@ class Receiver:
                     listen(*settings, self.stop, self.update, play,
                            self.frequency_changed, self.scope_changed, self.take_tune,
                            self.take_commands, self.radio_state_changed,
-                           model=read_config().get("Radio", "Auto (Icom)"),
-                           audio_port=(int(read_config().get("Audio port", "60001"))
-                                       if read_config().get("Radio") == "TS-890S" else 60001),
-                           admin=read_config().get("Login") == "Admin",
+                           model=self.session_config.get("Radio", "Auto (Icom)"),
+                           audio_port=(int(self.session_config.get("Audio port", "60001"))
+                                       if self.session_config.get("Radio") == "TS-890S" else 60001),
+                           admin=self.session_config.get("Login") == "Admin",
                            tx_enabled=self.tx_enabled, take_tx=self.take_tx)
                     break
                 except (ConnectionLost, OSError) as error:
@@ -335,7 +322,7 @@ class Receiver:
                 return
             if hz is None:
                 base = self.target if time.monotonic() < self.target_deadline else None
-                hz = (base or self.frequency) + steps * TUNE_STEP
+                hz = (base or self.frequency) + steps * self.step
             ranges = self.radio_state.get("profile", DEFAULT_PROFILE)["bands"]
             if not any(start <= hz <= end for _, start, end in ranges):
                 return
@@ -419,7 +406,7 @@ class Display:
         self.history.paste(row.convert("RGB"), (0, 0))
 
     def render(self, values, selected, editing, status, volume, busy, frequency,
-               scope, band, volume_visible, radio_state=None, help_open=False):
+               scope, band, volume_visible, radio_state=None, help_open=False, radio_menu=None, step=1000):
         image = Image.new("RGB", (WIDTH, HEIGHT), BG)
         draw = ImageDraw.Draw(image)
 
@@ -511,13 +498,21 @@ class Display:
                 ("Fn + S / D", "Volume down / up"),
                 ("Fn + A", "Mute / unmute"),
                 ("Enter", "Play / stop"),
-                ("S / Esc", "Settings / main menu"),
+                ("S / Esc", "Radio settings / menu"),
             )
             for index, (key, action) in enumerate(shortcuts):
                 y = 33 + index * 12
                 label(18, y, key, "small", GREEN)
                 label(101, y, action, "small")
             label(18, 149, "Tab / Esc - Close help", "small", MUTED)
+        if radio_menu is not None:
+            draw.rounded_rectangle((10, 27, 310, 143), 8, fill=BG, outline=GREEN)
+            label(22, 34, "Radio settings", color=GREEN)
+            for index, text in enumerate(("Band", f"Tuning step: {step} Hz", "Back")):
+                y = 64 + index * 22
+                if radio_menu == index:
+                    draw.rounded_rectangle((18, y-2, 302, y+18), 4, fill=CARD)
+                label(27, y, text, "small", GREEN if radio_menu == index else WHITE)
         self.present(image)
 
     def present(self, image):
@@ -537,18 +532,22 @@ class Display:
 
 
 def ui(lcd, keyboard):
+    from settings_ui import SettingsScreens
     display = Display(lcd)
     values = load()
+    if not values[0]:
+        SettingsScreens(display, keyboard, keys_ready, text_character, ProfileStore(CONFIG)).radios()
+        values = load()
+        if not values[0]:
+            return
     rx = Receiver()
-    selected = None if values[0] else 0
-    editing = False
-    original = ""
     shift = set()
     fn = False
     held_tune = None
     next_repeat = 0
     save_at = None
     band = None
+    radio_menu = None
     help_open = False
     volume_until = 0
     redraw = None
@@ -560,7 +559,7 @@ def ui(lcd, keyboard):
             if save_at is not None and now >= save_at:
                 save(values, rx.volume, rx.muted)
                 save_at = None
-            if selected is not None or band is not None or help_open or not rx.busy():
+            if band is not None or radio_menu is not None or help_open or not rx.busy():
                 held_tune = None
             if held_tune is not None and now >= next_repeat:
                 rx.tune(steps=-1 if held_tune in (44, 105) else 1)
@@ -570,20 +569,14 @@ def ui(lcd, keyboard):
             if not busy:
                 band = None
             scope = rx.scope if busy and rx.scope and now - rx.scope[0] < 2 else None
-            state = (tuple(values), selected, editing, rx.status, 0 if rx.muted else rx.volume, busy,
-                     rx.displayed_frequency() if busy else None, scope, band, now < volume_until, rx.radio_state, help_open)
+            state = (tuple(values), None, False, rx.status, 0 if rx.muted else rx.volume, busy,
+                     rx.displayed_frequency() if busy else None, scope, band, now < volume_until,
+                     rx.radio_state, help_open, radio_menu, rx.step)
             if now >= next_paint and (state != redraw or now < initial):
                 display.render(*state)
                 redraw = state
                 next_paint = now + 1 / 30
-            if not select.select([keyboard], [], [], 0.01)[0]:
-                continue
-            events = os.read(keyboard, EVENT.size * 32)
-            if not events:
-                raise OSError("Cardputer keyboard disconnected")
-            for _, _, kind, key, pressed in EVENT.iter_unpack(events):
-                if kind != 1:
-                    continue
+            for key, pressed in keys_ready(keyboard, 0.01):
                 if key in (KEY_FN, KEY_CARDPUTER_FN):
                     fn = bool(pressed)
                     continue
@@ -595,10 +588,6 @@ def ui(lcd, keyboard):
                         held_tune = None
                     continue
                 if pressed == 2:
-                    continue
-                if help_open and key != 31:
-                    if key in (1, 15):
-                        help_open = False
                     continue
                 if key in (KEY_FN_S, KEY_FN_D, KEY_VOLUME_DOWN, KEY_VOLUME_UP) or (fn and key in (31, 32)):
                     increase = key in (32, KEY_FN_D, KEY_VOLUME_UP)
@@ -612,57 +601,41 @@ def ui(lcd, keyboard):
                     volume_until = time.monotonic() + 1.4
                     save_at = time.monotonic() + 0.3
                     continue
-                if key == 31 and not fn and selected is None:
-                    rx.stop.set()
-                    if rx.thread is not None:
-                        rx.thread.join(timeout=2)
-                    selected = 0
+                if radio_menu is not None:
+                    if key in (1, 15, 31):
+                        radio_menu = None
+                    elif key in (33, 44, 103, 105, 45, 46, 108, 106):
+                        radio_menu = (radio_menu + (-1 if key in (33,44,103,105) else 1)) % 3
+                    elif key == 28:
+                        if radio_menu == 0:
+                            if busy and rx.frequency:
+                                band = min(range(len(bands)), key=lambda i: abs(bands[i][1] - rx.frequency))
+                                radio_menu = None
+                            else:
+                                rx.update("Connect to choose a band")
+                        elif radio_menu == 1:
+                            rx.step = STEPS[(STEPS.index(rx.step) + 1) % len(STEPS)]
+                            store = ProfileStore(CONFIG)
+                            store.update(store.active()["id"], step=rx.step)
+                        else:
+                            radio_menu = None
+                    continue
+                if key == 31 and not fn:
+                    radio_menu = 0
                     help_open = False
                     band = held_tune = None
                     continue
-                if editing:
-                    if key == 1:
-                        values[selected], editing = original, False
-                    elif key == 28 and pressed == 1:
-                        try:
-                            save(values)
-                            editing = False
-                        except OSError:
-                            rx.update("Could not save settings")
-                            selected, editing = None, False
-                    elif key == 14:
-                        values[selected] = values[selected][:-1]
-                    elif (char := text_character(key, shift)) is not None:
-                        credential_limit = 99 if values[4] == "TS-890S" else 16
-                        limit = (253, 5, credential_limit, credential_limit, 32, 5, 5)[selected]
-                        if len(values[selected]) < limit and (selected not in (1, 5) or char.isdecimal()):
-                            values[selected] += char
-                elif selected is not None:
-                    if key == 1:
-                        selected = None
-                    elif key in (15, 103, 108):
-                        selected = (selected + (-1 if key == 103 else 1)) % len(FIELDS)
-                    elif key == 28 and pressed == 1:
-                        if selected in (4, 6):
-                            choices = RADIO_CHOICES if selected == 4 else ("User", "Admin")
-                            before = values[selected]
-                            index = choices.index(before) if before in choices else -1
-                            values[selected] = choices[(index + 1) % len(choices)]
-                            if selected == 4:
-                                if values[selected] == "TS-890S" and values[1] == "50001":
-                                    values[1] = "60000"
-                                elif values[selected] != "TS-890S" and values[1] == "60000":
-                                    values[1] = "50001"
-                            save(values)
-                        else:
-                            original, editing = values[selected], True
-                elif band is not None:
+                if help_open:
+                    if key in (1, 15):
+                        help_open = False
+                    continue
+                if band is not None:
                     if key in (1, 48):
                         band = None
                     elif key in (44, 46, 105, 106, 103, 108, 15):
                         step = {44: -1, 105: -1, 103: -3, 108: 3}.get(key, 1)
                         band = (band + step) % len(bands)
-                    elif key == 28 and pressed == 1:
+                    elif key == 28:
                         rx.change_band(bands[band][1])
                         band = None
                 elif key == 15:
@@ -674,16 +647,16 @@ def ui(lcd, keyboard):
                     rx.tune(steps=-1 if key in (44, 105) else 1)
                     held_tune = key
                     next_repeat = time.monotonic() + 0.35
-                elif key == 50 and pressed == 1:
+                elif key == 50:
                     rx.command("mode", 1 if rx.radio_state.get("mode") == 0 else 0)
-                elif key == 49 and pressed == 1:
+                elif key == 49:
                     rx.command("nr")
-                elif key == 20 and pressed == 1:
+                elif key == 20:
                     rx.command("tuner")
-                elif key == 48 and rx.frequency and rx.busy() and pressed == 1:
+                elif key == 48 and rx.frequency and busy:
                     band = min(range(len(bands)), key=lambda i: abs(bands[i][1] - rx.frequency))
-                elif key == 28 and pressed == 1:
-                    if rx.busy():
+                elif key == 28:
+                    if busy:
                         rx.stop.set()
                     else:
                         try:
@@ -697,7 +670,6 @@ def ui(lcd, keyboard):
         if rx.thread is not None:
             rx.thread.join(timeout=2)
 
-
 def menu_frame(display, title, subtitle):
     image = Image.new("RGB", (WIDTH, HEIGHT), BG)
     draw = ImageDraw.Draw(image)
@@ -709,57 +681,94 @@ def menu_frame(display, title, subtitle):
 def keys_ready(keyboard, timeout=.05):
     if not select.select([keyboard], [], [], timeout)[0]:
         return []
-    data = os.read(keyboard, EVENT.size * 32)
+    data = os.read(keyboard, EVENT.size)
     if not data:
         raise OSError("Cardputer keyboard disconnected")
     return [(key, value) for _, _, kind, key, value in EVENT.iter_unpack(data) if kind == 1]
 
 
-def home_frame(display, choice=0):
-    image, draw = menu_frame(display, "ICOMzero", "")
-    for i, (title, subtitle) in enumerate(
-        (("Radio", "Listen & explore"), ("FT8", "Auto tune & decode"))
-    ):
-        x = 12 + i * 154
-        draw.rounded_rectangle(
-            (x, 62, x + 142, 134),
-            10,
-            fill=CARD,
-            outline=GREEN if choice == i else CARD,
-            width=2,
-        )
-        draw.text(
-            (x + 12, 71),
-            title,
-            font=display.fonts["title"],
-            fill=GREEN if choice == i else WHITE,
-        )
-        draw.text((x + 12, 108), subtitle, font=display.fonts["small"], fill=MUTED)
-    draw.text(
-        (12, 150),
-        "Z / C choose    Ent open    Esc exit",
-        font=display.fonts["small"],
-        fill=MUTED,
-    )
+def home_icon(draw, center, kind, color):
+    x,y = center
+    if kind == 0:
+        draw.line((x,y+13,x,y-9), fill=color,width=2)
+        draw.line((x,y-8,x-8,y+13,x+8,y+13,x,y-8), fill=color,width=2)
+        draw.ellipse((x-2,y-13,x+2,y-9),fill=color)
+        for span in (9,16):
+            draw.arc((x-span,y-11-span,x+span,y-11+span),125,235,fill=color,width=2)
+            draw.arc((x-span,y-11-span,x+span,y-11+span),-55,55,fill=color,width=2)
+    elif kind == 1:
+        for offset,height in ((-17,4),(-11,10),(-5,18),(1,8),(7,14),(13,5)):
+            draw.rounded_rectangle((x+offset,y-height//2,x+offset+3,y+height//2),1,fill=color)
+        draw.line((x-18,y+15,x+18,y+15),fill=color,width=1)
+    else:
+        import math
+        for index in range(8):
+            angle=index*math.pi/4
+            draw.line((x+int(12*math.cos(angle)),y+int(12*math.sin(angle)),x+int(17*math.cos(angle)),y+int(17*math.sin(angle))),fill=color,width=4)
+        draw.ellipse((x-12,y-12,x+12,y+12),outline=color,width=3)
+        draw.ellipse((x-4,y-4,x+4,y+4),outline=color,width=2)
+
+
+def home_frame(display, choice=0, profile_name="", checking=False):
+    image = Image.new("RGB", (WIDTH, HEIGHT), BG)
+    draw = ImageDraw.Draw(image)
+    draw.text((12, 7), "ICOMzero", font=display.fonts["title"], fill=WHITE)
+    draw.rounded_rectangle((244, 11, 308, 30), 6, fill=CARD)
+    draw.text((250, 13), "v"+VERSION, font=display.fonts["small"], fill=GREEN)
+    name = profile_name or "Choose your radio in Settings"
+    while draw.textlength(name,font=display.fonts["small"]) > 294:
+        name=name[:-1]
+    draw.text((12, 38), name, font=display.fonts["small"], fill=MUTED)
+    for i,title in enumerate(("Radio", "FT8", "Settings")):
+        left=10+i*102
+        selected=i==choice
+        draw.rounded_rectangle((left,63,left+96,139),9,fill="#173c49" if selected else CARD,outline=GREEN if selected else "#2b3e4b",width=2 if selected else 1)
+        home_icon(draw,(left+48,91),i,GREEN if selected else MUTED)
+        width=draw.textlength(title,font=display.fonts["body"])
+        draw.text((left+48-width/2,115),title,font=display.fonts["body"],fill=WHITE if selected else MUTED)
+    draw.text((12,151),"Checking updates…" if checking else "Z / C choose   Ent open   Esc exit",font=display.fonts["small"],fill=MUTED)
     return image
 
 
 def home(lcd, keyboard):
+    from settings_ui import SettingsScreens
+    from update_session import UpdateSession
     display = Display(lcd)
+    store = ProfileStore(CONFIG)
+    settings = SettingsScreens(display,keyboard,keys_ready,text_character,store)
+    update = UpdateSession()
+    if store.read().get("check_updates",True):
+        update.check(startup=True)
+    startup_prompted=False
     choice = 0
-    while True:
-        image = home_frame(display, choice)
-        display.present(image)
-        for key, pressed in keys_ready(keyboard):
-            if pressed != 1:
-                continue
-            if key == 1:
-                return
-            if key in (44, 46, 105, 106, 103, 108, 15):
-                choice = 1 - choice
-            elif key == 28:
-                (ui if choice == 0 else ft8_ui)(lcd, keyboard)
-
+    try:
+        while True:
+            if update.state=="available" and not startup_prompted:
+                startup_prompted=True
+                review=settings.select("Update available",["Later","View update"],"ICOMzero "+update.updater.release[0]+" is ready")
+                if review==1:settings.update(update)
+            active = store.active()
+            display.present(home_frame(display,choice,active["name"] if active["connection"]["Host"] else "",update.state=="checking"))
+            for key, pressed in keys_ready(keyboard):
+                if pressed != 1:
+                    continue
+                if key == 1:
+                    return
+                if key in (44,105,103):
+                    choice = (choice-1)%3
+                elif key in (46,106,108,15):
+                    choice = (choice+1)%3
+                elif key==31:
+                    settings.general(update)
+                    startup_prompted=True
+                elif key == 28:
+                    if choice==2:
+                        settings.general(update)
+                        startup_prompted=True
+                    else:
+                        (ui if choice == 0 else ft8_ui)(lcd, keyboard)
+    finally:
+        update.cancel()
 
 def ft8_frame(
     display,
@@ -967,7 +976,8 @@ def ft8_ui(lcd, keyboard):
     display = Display(lcd)
     values = load()
     if not values[0]:
-        ui(lcd, keyboard)
+        from settings_ui import SettingsScreens
+        SettingsScreens(display, keyboard, keys_ready, text_character, ProfileStore(CONFIG)).radios()
         values = load()
         if not values[0]:
             return
@@ -1704,5 +1714,7 @@ if __name__ == "__main__":
         sys.exit(main())
     except KeyboardInterrupt:
         sys.exit(0)
-    except (RadioError, OSError) as error:
+    except RestartApp:
+        os.execv(sys.executable, [sys.executable, __file__])
+    except (RadioError, OSError, ValueError) as error:
         sys.exit(str(error))

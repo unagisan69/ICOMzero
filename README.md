@@ -27,28 +27,36 @@ Connect the Cardputer to a network that can reach the radio and enable the radio
 For manual installation, download the `.deb` from [GitHub Releases](https://github.com/unagisan69/ICOMzero/releases), then install it on the Cardputer.
 
 ```sh
-sudo apt install ./icomzero_0.14.2-1_arm64.deb
+sudo apt install ./icomzero_0.15.0-1_arm64.deb
 ```
 
 Open **ICOMzero** from APPLaunch after installation.
 
-Version 0.14.2 includes the hardware-validated IC-7300MK2 FT8 reliability updates: continuous 12 kHz audio, a 300 ms transmit buffer with matching PTT drain, complete packet-loss repair, and bounded control recovery. The FT8 status bar keeps the armed dot and TX/SWR/power indicators without AUTO or POTA text labels. Successful contacts are saved locally and uploaded independently to enabled logging services. Radio listening remains at 48 kHz. Compare the radio’s own power/SWR/ALC meters with the app; nominal power is a control setting, not a guarantee of measured RF output.
+Version 0.15.0 includes the hardware-validated IC-7300MK2 FT8 reliability updates: continuous 12 kHz audio, a 300 ms transmit buffer with matching PTT drain, complete packet-loss repair, and bounded control recovery. The FT8 status bar keeps the armed dot and TX/SWR/power indicators without AUTO or POTA text labels. Successful contacts are saved locally and uploaded independently to enabled logging services. Radio listening remains at 48 kHz. Compare the radio’s own power/SWR/ALC meters with the app; nominal power is a control setting, not a guarantee of measured RF output.
 
 ## Listen
 
-1. Choose **Radio** from the startup menu. Open **Setup** with **S**. Setup opens automatically when no connection is configured.
-2. Enter the radio's IPv4 address or hostname, control port, username, and password. Use **↑**, **↓**, or **Tab** to scroll through setup fields. Press **Enter** to edit a text field and again to save. Press **Enter** on **Radio** to cycle models. **Auto (Icom)** identifies a supported Icom from its name or CI-V address. Select the exact model if the radio uses a custom name and address. Press **Esc** to leave setup.
+1. Open **Settings → Radios** from the startup menu. Choose a named radio, then **Edit connection**, or add/clone a profile. Use **Use this radio** to select the connection used by both Radio and FT8. Legacy connection settings migrate automatically and credentials stay private on the device.
+2. Enter the radio's name, IPv4 address or hostname, ports, username and password. **F/X** or arrows select fields; **Enter** opens a text field or model/login picker. Enter saves an edited field; Esc cancels that edit or returns to the previous screen. Backspace erases and **Del** clears a text field. **SYM+B** enters a dot. **Auto (Icom)** identifies a supported Icom from its name or CI-V address; choose an exact model for a custom radio name/address.
    - Icom uses control port **50001** by default. Keep its normal negotiated audio ports.
    - TS-890S uses **60000** for TCP control and **60001** for UDP audio. Selecting TS-890S switches the default control port. Set **Login** to **User** or **Admin** to match the account configured on the radio. Its 16 kHz LPCM audio is converted to the app's 48 kHz speaker stream.
-3. Press **Enter** to start or stop listening. **Z** and **C** tune down and up in 1 kHz steps. Hold either key to scroll. Press **B** for band presets, select with **Z** or **C**, then press **Enter** to tune to the displayed frequency. The menu shows presets within the connected model’s frequency ranges. Band presets select LSB on 160/80/40 m and USB on the remaining presets.
+3. Choose **Radio**, then press **Enter** to start or stop listening. **Z** and **C** tune down and up at the saved tuning step. Hold either key to scroll. Press **B** for band presets, select with **Z** or **C**, then press **Enter** to tune to the displayed frequency. The menu shows presets within the connected model’s frequency ranges. Band presets select LSB on 160/80/40 m and USB on the remaining presets.
 4. Use **Fn+S** to lower the volume and **Fn+D** to raise it. Hold Fn while pressing S or D repeatedly. **Fn+A** toggles mute. The volume appears briefly as you adjust it, and volume and mute are saved for the next launch.
 5. **N** toggles the radio’s noise reduction where supported. **T** starts its antenna tuner, which briefly transmits a tuning carrier. T is inactive on receiver-only radios and models without a tuner command. The top line shows the current mode, NR when enabled, and TUNING during a tuner operation. Press **M** to switch USB/LSB. Press **Esc** to return to the main menu.
 
 The waterfall uses the radio’s scope span and center or fixed-range settings. Icom radios negotiate secondary UDP ports. Kenwood audio arrives on the configured UDP audio port. Keep the radio and Cardputer on the same LAN. Temporarily refused/zero-port stream replies trigger fresh stream transactions with bounded backoff, using the existing login. Login, secondary-channel setup and CI-V startup have separate time budgets. Address-change and other socket errors enter the bounded reconnect path, including Wi-Fi roaming/DHCP changes. A recovered session requests RX, retains any latched RF fault, and does not restart FT8 transmission or an automatic tuner carrier. FT8 revalidates the entry band after reconnecting. Peer-closed control, CAT and audio channels retain their channel-specific reason instead of a generic Disconnected message. Connection failures retain their underlying reason on screen and in a bounded private `~/.config/icomzero/connection-diagnostics.jsonl` file (no credentials or packet payloads). If the radio is busy, disconnect the other LAN client and try again. Settings are saved in `~/.config/icomzero/radio.json` (or under `$XDG_CONFIG_HOME`) with user-only permissions. The password is stored in that file as text and encoded using Icom's LAN protocol on the wire.
 
-Press **S** on the receiver screen to open radio settings, including while connected; this stops the current stream before editing. Enter saves an edited field; Esc leaves settings. **SYM+B** enters the dot in an IPv4 address. Other symbol-layer punctuation follows the stock Cardputer keyboard.
+Press **S** on the receiver screen for **Band** and **Tuning step**. Enter on Tuning step cycles **1000, 500 and 100 Hz**; the choice is saved per radio and applies to tap/hold tuning. Reception continues while this menu is open. Connection settings now live in the main **Settings → Radios** menu.
 
 Press **Tab** on the receiver screen to open the keyboard shortcut guide. **Tab** or **Esc** closes it.
+
+## App settings and updates
+
+The startup menu has **Radio**, **FT8** and **Settings** icon cards. The active radio name and installed version appear above them. Exit Radio/FT8 before changing the active connection in **Settings → Radios**. Names may be up to 32 characters; cloned profiles copy connection details and tuning step, then can be edited independently. Volume/mute and FT8 logging preferences remain app-wide.
+
+**Settings → Check for updates** checks stable releases from this GitHub repository. Launch checks run in the background with a seven-second limit; offline checks do not block the menu or interrupt a radio session. **Launch update check** can be turned off. When an update is available, choose View update and Download. The app shows transferred bytes and a progress bar, verifies SHA-256, then asks for the **device administrator password** to install. This is separate from radio/API credentials and is never saved. Installation validates package name, version and ARM64 architecture, refuses downgrades, and reports APT installation progress. Download can be cancelled; an installation already in progress is allowed to finish. Choose Restart after completion. Settings and QSO history are preserved. Private bounded timing logs contain stages/durations only; root installation output goes to `/var/log/icomzero-update.log`.
+
+The updater is adapted from [MeshCore Zero](https://github.com/unagisan69/meshcore-zero); its MIT notice is included in `docs/meshcore-updater-LICENSE`. Release maintainers must upload `icomzero_VERSION-1_arm64.deb` and **SHA256SUMS** together for a stable `vVERSION` release. SHA256SUMS names the package file without a path. The updater accepts only matching release assets from this repository over HTTPS.
 
 ## FT8 contacts
 
@@ -116,7 +124,7 @@ sudo apt install build-essential python3-pil python3-numpy
 make check
 make test
 make package
-sudo apt install ./build/icomzero_0.14.2-1_arm64.deb
+sudo apt install ./build/icomzero_0.15.0-1_arm64.deb
 ```
 
 Use `make package APPBUILDER=/path/to/AppBuilder` for another checkout location. The package includes a foreground APPLaunch entry and declares its Python, Pillow, NumPy, font, ALSA, and PipeWire dependencies.
