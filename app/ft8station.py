@@ -60,6 +60,21 @@ def record_fault(receiver, reason, job=None):
             "model": state.get("profile", {}).get("model"),
             "frequency": receiver.frequency,
             "power_control": state.get("tx_power"),
+            "readiness": {
+                name: state.get(name)
+                for name in (
+                    "tx_ready",
+                    "civ_recovering",
+                    "mod_source",
+                    "data_mode",
+                    "data_filter",
+                    "mode",
+                    "power_ready",
+                    "split",
+                    "rit",
+                    "xit",
+                )
+            },
             "transport_gap_ms": state.get("transport_gap_ms"),
             "transport_gap_age_s": (
                 round(now - state["transport_gap_at"], 3)
@@ -225,6 +240,7 @@ class Station:
         pending = None
         cache = {}
         prepared_at = 0
+        setup_confirmed = False
         clock_at = 0
         clearing_at = None
         logged_fault = None
@@ -298,7 +314,7 @@ class Station:
                         self.tuning = False
                         continue
                     if self.receiver.radio_state.get("tx_fault"):
-                        raise ValueError("Clear the RF warning in Menu first")
+                        raise ValueError("Press Enter to clear the RF warning first")
                     if action == "tune":
                         self.tuning = False
                         profile = self.receiver.radio_state.get("profile", {})
@@ -344,6 +360,7 @@ class Station:
                     )
                     self.receiver.command("ft8_prepare")
                     prepared_at = time.monotonic()
+                    setup_confirmed = False
             except queue.Empty:
                 pass
             except (ValueError, OSError) as error:
@@ -461,6 +478,12 @@ class Station:
                         self.auto.prepare(decoded_slot=self.decoder.last_decoded_slot)
                     except OSError:
                         self.receiver.stop_tx()
+                # This deadline measures a continuous loss of readiness, not
+                # the age of the CQ session. Brief CI-V recovery must not trip
+                # an already-expired startup timer after successful frames.
+                if self.receiver.radio_state.get("tx_ready"):
+                    prepared_at = time.monotonic()
+                    setup_confirmed = True
                 # Encode during RX, not after entering the small key-up window.
                 if self.sequence.enabled and self.sequence.stage != "monitor":
                     key = (
@@ -531,7 +554,14 @@ class Station:
                     not self.receiver.radio_state.get("tx_ready")
                     and time.monotonic() - prepared_at > 8
                 ):
-                    self.sequence.stop("LAN modulation setup not confirmed")
+                    reason = (
+                        "Radio TX settings not confirmed"
+                        if setup_confirmed
+                        else "LAN modulation setup not confirmed"
+                    )
+                    self.receiver.stop_tx()
+                    self.sequence.stop(reason)
+                    record_fault(self.receiver, reason)
             if self.auto.active and mono >= audit_at:
                 audit_at = mono + 1
                 try:

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.12.5 — 2026-11-22
+
+- Repair every packet in inclusive Icom retransmission ranges, including sequence wrap, rather than only their endpoints. Deduplicate overlapping ranges, bound repair bursts, and preserve idle placeholders for commands deliberately removed from replay history.
+- Measure readiness timeouts from the last confirmed ready state, allowing brief CI-V recovery after successful transmissions without reusing an expired startup deadline. Keep an eight-second continuous readiness limit and log readiness failures privately with source/mode/control state.
+- Retain 300 ms TX buffering, matching PTT drain, CI-V recovery and all RF guards.
+
 ## 0.12.4 — 2026-11-22
 
 - Negotiate a 300 ms Icom FT8 transmit buffer and hold PTT for its matching drain plus a 50 ms margin after the final samples. Preserve UTC packet scheduling and existing transmit watchdog limits.

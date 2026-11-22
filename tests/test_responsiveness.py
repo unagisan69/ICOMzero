@@ -113,6 +113,62 @@ class PacketRecovery(unittest.TestCase):
         self.channel.receive()
         self.assertEqual(self.channel.ping_seq, 1)
 
+    def repair_request(self, first, last):
+        self.socket.incoming.append(
+            HEADER.pack(20, 1, 0, 7, self.channel.local)
+            + struct.pack("<HH", first, last)
+        )
+        self.channel.receive()
+
+    def fill_history(self, first, count):
+        self.channel.seq = first
+        for i in range(count):
+            self.channel.send(0, body=bytes((i,)), tracked=True)
+        self.socket.sent.clear()
+
+    def test_radio_range_repair_includes_all_middle_packets(self):
+        self.fill_history(1978, 5)
+        self.repair_request(1978, 1982)
+        self.assertEqual(
+            [HEADER.unpack_from(p)[2] for p in self.socket.sent],
+            list(range(1978, 1983)),
+        )
+        self.assertEqual(
+            [p[16:] for p in self.socket.sent], [bytes((i,)) for i in range(5)]
+        )
+
+    def test_range_repair_wraps_through_sequence_zero(self):
+        self.fill_history(65534, 4)
+        self.repair_request(65534, 1)
+        self.assertEqual(
+            [HEADER.unpack_from(p)[2] for p in self.socket.sent], [65534, 65535, 0, 1]
+        )
+
+    def test_overlap_does_not_replay_the_same_packet_twice(self):
+        self.fill_history(1, 4)
+        self.socket.incoming.append(
+            HEADER.pack(24, 1, 0, 7, self.channel.local)
+            + struct.pack("<HHHH", 1, 3, 2, 4)
+        )
+        self.channel.receive()
+        self.assertEqual(
+            [HEADER.unpack_from(p)[2] for p in self.socket.sent], [1, 2, 3, 4]
+        )
+
+    def test_unretained_command_in_range_gets_an_idle_not_a_command_replay(self):
+        self.fill_history(1, 3)
+        self.channel.history.pop(2)
+        self.repair_request(1, 3)
+        self.assertEqual(
+            [HEADER.unpack_from(p)[2] for p in self.socket.sent], [1, 2, 3]
+        )
+        self.assertEqual(len(self.socket.sent[1]), 16)
+
+    def test_oversized_range_is_ignored_instead_of_amplified(self):
+        self.fill_history(1, 3)
+        self.repair_request(0, 65534)
+        self.assertEqual(self.socket.sent, [])
+
     def test_untracked_zero_idle_cannot_hide_login_sequence_zero(self):
         self.packet(0, b"")
         self.channel.receive()

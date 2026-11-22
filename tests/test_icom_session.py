@@ -11,7 +11,14 @@ from civ import encode_frequency
 
 
 class StreamNegotiation(unittest.TestCase):
-    def run_radio(self, refusal, audio_delay=0, tx_enabled=False, recover_civ=False):
+    def run_radio(
+        self,
+        refusal,
+        audio_delay=0,
+        tx_enabled=False,
+        recover_civ=False,
+        repair_range=False,
+    ):
         stop = threading.Event()
         errors, statuses, frames, state, requests = [], [], [], {}, []
         sockets = [socket.socket(socket.AF_INET, socket.SOCK_DGRAM) for _ in range(3)]
@@ -28,6 +35,9 @@ class StreamNegotiation(unittest.TestCase):
         audio_idles = []
         suspended = reopened = False
         open_count = 0
+        inject_range = repair_complete = False
+        lost_packets = {}
+        repaired = set()
 
         def reply(sock, address, local, kind, body=b""):
             seq = seqs[sock]
@@ -37,7 +47,7 @@ class StreamNegotiation(unittest.TestCase):
             )
 
         def server():
-            nonlocal audio_at, pcm_seq, ready_after, suspended, reopened, open_count
+            nonlocal audio_at, pcm_seq, ready_after, suspended, reopened, open_count, inject_range, repair_complete
             try:
                 with selectors.DefaultSelector() as selector:
                     for sock in sockets:
@@ -48,6 +58,27 @@ class StreamNegotiation(unittest.TestCase):
                             data, addr = sock.recvfrom(65535)
                             size, kind, seq, local, remote = HEADER.unpack_from(data)
                             clients[sock] = (addr, local)
+                            if sock is cat and kind == 0 and inject_range:
+                                if seq in lost_packets and data == lost_packets[seq]:
+                                    repaired.add(seq)
+                                    if len(repaired) == 5:
+                                        repair_complete = True
+                                        inject_range = False
+                                elif len(lost_packets) < 5:
+                                    lost_packets[seq] = data
+                                    if len(lost_packets) == 5:
+                                        first, last = min(lost_packets), max(
+                                            lost_packets
+                                        )
+                                        self.assertEqual(last - first, 4)
+                                        reply(
+                                            sock,
+                                            addr,
+                                            local,
+                                            1,
+                                            struct.pack("<HH", first, last),
+                                        )
+                                continue
                             if kind == 3:
                                 reply(sock, addr, local, 4)
                             elif kind == 6:
@@ -159,10 +190,15 @@ class StreamNegotiation(unittest.TestCase):
         worker.start()
 
         def sample(pcm):
-            nonlocal suspended
+            nonlocal suspended, inject_range
             frames.append(pcm)
             if state.get("frequency") and "mode" in state:
-                if recover_civ:
+                if repair_range:
+                    if repair_complete:
+                        stop.set()
+                    elif not lost_packets:
+                        inject_range = True
+                elif recover_civ:
                     if reopened and state.get("civ_recovered_at") is not None:
                         stop.set()
                     elif not reopened:
@@ -197,6 +233,9 @@ class StreamNegotiation(unittest.TestCase):
         self.assertEqual(len(requests), 2)
         self.assertNotEqual(requests[0], requests[1])
         self.assertIn("Radio busy; waiting to open stream", statuses)
+        if repair_range:
+            self.assertTrue(repair_complete)
+            self.assertEqual(len(repaired), 5)
         if recover_civ:
             self.assertGreaterEqual(open_count, 2)
             self.assertIsNotNone(state.get("civ_recovered_at"))
@@ -216,3 +255,6 @@ class StreamNegotiation(unittest.TestCase):
 
     def test_stalled_civ_recovers_without_relogin_or_reopening_audio(self):
         self.run_radio(0, tx_enabled=True, recover_civ=True)
+
+    def test_compact_five_packet_range_is_fully_repaired(self):
+        self.run_radio(0, tx_enabled=True, repair_range=True)

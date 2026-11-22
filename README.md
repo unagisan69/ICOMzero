@@ -27,12 +27,12 @@ Connect the Cardputer to a network that can reach the radio and enable the radio
 For manual installation, download the `.deb` from [GitHub Releases](https://github.com/unagisan69/ICOMzero/releases), then install it on the Cardputer.
 
 ```sh
-sudo apt install ./icomzero_0.12.4-1_arm64.deb
+sudo apt install ./icomzero_0.12.5-1_arm64.deb
 ```
 
 Open **ICOMzero** from APPLaunch after installation.
 
-Version 0.12.4 is an experimental reliability update for operator testing: Icom FT8 uses native 12 kHz mono audio with 20 ms transmit packets and slower, staggered meter polling. It also recognizes confirmed tuner cycles shorter than 600 ms and starts tracked UDP sequences at one. It removes empty tracked idle packets from the audio channel and follows reference idle/ping sequencing. The radio TX buffer is 300 ms, with a matching PTT drain interval. A stalled CI-V bridge is reopened after two seconds and must return fresh frequency/mode before TX is ready; the five-second control failure deadline remains. On-air audio reliability remains under validation. Radio listening remains at 48 kHz. Compare the radio’s own power/SWR/ALC meters with the app; nominal power is a control setting, not a guarantee of measured RF output.
+Version 0.12.5 is an experimental reliability update for operator testing: Icom FT8 uses native 12 kHz mono audio with 20 ms transmit packets and slower, staggered meter polling. It also recognizes confirmed tuner cycles shorter than 600 ms and starts tracked UDP sequences at one. It removes empty tracked idle packets from the audio channel and follows reference idle/ping sequencing. The radio TX buffer is 300 ms, with a matching PTT drain interval. A stalled CI-V bridge is reopened after two seconds and must return fresh frequency/mode before TX is ready; the five-second control failure deadline remains. On-air audio reliability remains under validation. Radio listening remains at 48 kHz. Compare the radio’s own power/SWR/ALC meters with the app; nominal power is a control setting, not a guarantee of measured RF output.
 
 ## Listen
 
@@ -112,7 +112,7 @@ sudo apt install build-essential python3-pil python3-numpy
 make check
 make test
 make package
-sudo apt install ./build/icomzero_0.12.4-1_arm64.deb
+sudo apt install ./build/icomzero_0.12.5-1_arm64.deb
 ```
 
 Use `make package APPBUILDER=/path/to/AppBuilder` for another checkout location. The package includes a foreground APPLaunch entry and declares its Python, Pillow, NumPy, font, ALSA, and PipeWire dependencies.

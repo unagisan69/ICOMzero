@@ -77,6 +77,23 @@ class ConnectionLost(RadioError):
     """A transient session failure that can be retried without user input."""
 
 
+def repair_sequences(data):
+    """Icom multi-packet repair payloads contain inclusive start/end pairs."""
+    if len(data) == HEADER.size:
+        return (HEADER.unpack_from(data)[2],)
+    requested = {}
+    for offset in range(HEADER.size, len(data) - 3, 4):
+        first, last = struct.unpack_from("<HH", data, offset)
+        count = ((last - first) & 0xFFFF) + 1
+        # A session retains at most 512 packets. Reject malformed/huge ranges
+        # rather than turning a small request into an unbounded packet burst.
+        if count > 512 or len(requested) + count > 512:
+            continue
+        for step in range(count):
+            requested[(first + step) & 0xFFFF] = None
+    return tuple(requested)
+
+
 class Channel:
     def __init__(self, sock, port):
         self.sock = sock
@@ -165,14 +182,7 @@ class Channel:
             elif data[16] == 1 and seq == self.ping_seq:
                 self.ping_seq = (self.ping_seq + 1) & 0xFFFF
         if kind == 1:
-            requested = (
-                (seq,)
-                if size == 16
-                else (
-                    entry[0]
-                    for entry in struct.iter_unpack("<H", data[16 : size - size % 2])
-                )
-            )
+            requested = repair_sequences(data)
             for requested_seq in requested:
                 if requested_seq in self.history:
                     with suppress(BlockingIOError):
