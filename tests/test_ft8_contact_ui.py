@@ -345,7 +345,8 @@ class SelectedMenus(unittest.TestCase):
         ]
 
         class Decoder:
-            def __init__(self):
+            def __init__(self, rate=48000):
+                assert rate == 12000
                 self.feed = lambda _: None
 
             def snapshot(self):

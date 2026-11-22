@@ -50,13 +50,13 @@ class MeterProtection(unittest.TestCase):
         self.assertIn("SWR", self.guard.check(10.2))
 
     def test_missing_and_stale_telemetry_fail_closed(self):
-        self.assertIsNone(self.guard.check(11.19))
-        self.assertIn("telemetry lost", self.guard.check(11.21))
+        self.assertIsNone(self.guard.check(11.99))
+        self.assertIn("telemetry lost", self.guard.check(12.01))
         self.guard.clear()
         self.guard.begin(now=20)
         self.sample(now=20.1)
-        self.assertIsNone(self.guard.check(21.2))
-        self.assertIn("telemetry lost", self.guard.check(21.31))
+        self.assertIsNone(self.guard.check(22.09))
+        self.assertIn("telemetry lost", self.guard.check(22.11))
 
     def test_internal_tuner_allows_bounded_meter_pause_but_keeps_swr_cutoff(self):
         self.guard.begin(tuning=True, now=10)

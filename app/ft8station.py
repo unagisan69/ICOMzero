@@ -7,6 +7,7 @@ import os
 import subprocess
 import threading
 import time
+from radio import FT8_RATE
 from ft8qso import Sequencer, waveform, finalize_contact
 from ft8log import load_settings, directory
 from ft8auto import AutoCQ, SessionLog
@@ -123,6 +124,7 @@ class Station:
     def __init__(self, receiver, decoder, logbook):
         self.receiver = receiver
         self.decoder = decoder
+        self.audio_rate = getattr(decoder, "rate", FT8_RATE)
         self.logbook = logbook
         self.commands = queue.Queue()
         self.closed = threading.Event()
@@ -464,7 +466,7 @@ class Station:
                     key = (
                         self.sequence.message,
                         self.sequence.hz,
-                        48000,
+                        self.audio_rate,
                         int(self.sequence.settings.get("tx_level", "50")),
                     )
                     if key not in cache:
@@ -509,7 +511,7 @@ class Station:
                             key = (
                                 pending[2],
                                 self.sequence.hz,
-                                48000,
+                                self.audio_rate,
                                 int(self.sequence.settings.get("tx_level", "50")),
                             )
                             if version != self.version or self.closed.is_set():

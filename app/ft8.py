@@ -140,7 +140,10 @@ class History:
 
 
 class Decoder:
-    def __init__(self):
+    def __init__(self, rate=48000):
+        if rate not in (12000, 48000):
+            raise ValueError("Unsupported capture rate")
+        self.rate = rate
         self.messages = deque(maxlen=2000)
         self.status = "Waiting for radio"
         self.progress = 0
@@ -161,7 +164,7 @@ class Decoder:
         self.early_sent = False
         # 129-tap low-pass rejects frequencies above the 12 kHz Nyquist limit.
         n = np.arange(129) - 64
-        self.kernel = np.sinc(2 * 5000 / 48000 * n) * np.hamming(129)
+        self.kernel = np.sinc(2 * 5000 / self.rate * n) * np.hamming(129)
         self.kernel /= self.kernel.sum()
         self.tail = np.zeros(128)
         self.capture_thread = threading.Thread(target=self.capture_work, daemon=True)
@@ -222,10 +225,11 @@ class Decoder:
                 self.status = "RX capture overrun; resynchronizing"
             if not self.active or not len(samples):
                 return
-            duration = len(samples) / 48000
+            duration = len(samples) / self.rate
             if (
                 self.anchor is None
-                or abs(now - (self.anchor + (self.count + len(samples)) / 48000)) > 0.5
+                or abs(now - (self.anchor + (self.count + len(samples)) / self.rate))
+                > 0.5
             ):
                 self.anchor = now - duration
                 self.count = 0
@@ -233,14 +237,18 @@ class Decoder:
                 self.parts = []
                 self.early_sent = False
                 self.tail = np.zeros(128)
-            start = self.anchor + self.count / 48000
-            filtered = np.convolve(
-                np.concatenate((self.tail, samples)), self.kernel, mode="valid"
-            )
-            self.tail = np.concatenate((self.tail, samples))[-128:]
-            phase = (-self.count) % 4
-            reduced = np.clip(filtered[phase::4], -32768, 32767).astype("<i2")
-            times = start + (phase + np.arange(len(reduced)) * 4) / 48000
+            start = self.anchor + self.count / self.rate
+            if self.rate == 12000:
+                reduced = samples
+                times = start + np.arange(len(samples)) / self.rate
+            else:
+                filtered = np.convolve(
+                    np.concatenate((self.tail, samples)), self.kernel, mode="valid"
+                )
+                self.tail = np.concatenate((self.tail, samples))[-128:]
+                phase = (-self.count) % 4
+                reduced = np.clip(filtered[phase::4], -32768, 32767).astype("<i2")
+                times = start + (phase + np.arange(len(reduced)) * 4) / self.rate
             self.count += len(samples)
             for slot in np.unique((times // 15).astype(np.int64)):
                 selected = reduced[(times >= slot * 15) & (times < (slot + 1) * 15)]

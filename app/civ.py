@@ -140,6 +140,7 @@ class Civ:
         self.ptt_query_at = 0
         self.tx_poll = 0
         self.meter_poll = 0
+        self.meter_index = 0
         self.nr = None
         self.toggle_nr = False
         self.scope = Scope(profile)
@@ -248,7 +249,7 @@ class Civ:
                 self.on_state("fault_clear_status", "Warning cleared")
         if self.ptt_pending and now >= self.ptt_query_at:
             self.schedule(b"\x1c\x00", urgent=True)
-            self.ptt_query_at = now + 0.05
+            self.ptt_query_at = now + 0.1
         if not self.open and now >= self.next_open:
             self.open_close(4)
             self.schedule(b"\x03", urgent=True)
@@ -293,9 +294,11 @@ class Civ:
                         b"\x1c\x00",
                         b"\x1c\x01",
                     )
-                    for query in reversed(queries):
-                        self.schedule(query, urgent=True)
-                    self.meter_poll = now + 0.25
+                    # One query per 100 ms: each meter is read every 500 ms.
+                    # FIFO deduplication avoids moving older queries backwards.
+                    self.schedule(queries[self.meter_index])
+                    self.meter_index = (self.meter_index + 1) % len(queries)
+                    self.meter_poll = now + 0.1
                 if (
                     self.requested_power is not None
                     and self.original_power is not None
@@ -445,12 +448,13 @@ class Civ:
             self.send(bytes((0x1C, 0, int(enabled))))
             self.ptt_pending = True
             self.ptt_expected = enabled
-            self.ptt_query_at = now + 0.05
+            self.ptt_query_at = now + 0.1
             self.on_state("ptt_pending", True)
             if enabled:
                 self.on_state("ptt_on_sent_at", time.monotonic())
                 self.protection.begin()
                 self.meter_poll = 0
+                self.meter_index = 0
                 # Never replay an expired PTT-on in response to a late repair.
                 self.channel.history.pop((self.channel.seq - 1) & 0xFFFF, None)
             self.schedule(b"\x1c\x00", urgent=True)

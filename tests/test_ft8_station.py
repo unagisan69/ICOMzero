@@ -287,7 +287,8 @@ class UserInterface(unittest.TestCase):
         rows = [Message(100, i + 500, f"CQ W{i}AA FN31", -10) for i in range(20)]
 
         class Decoder:
-            def __init__(self):
+            def __init__(self, rate=48000):
+                assert rate == 12000
                 self.feed = lambda _: None
 
             def snapshot(self):

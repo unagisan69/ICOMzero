@@ -4,6 +4,9 @@ import time
 from collections import deque
 from statistics import median
 
+# Four complete 500 ms polling rounds before declaring a meter unavailable.
+FT8_TELEMETRY_TIMEOUT = 2.0
+
 
 def interpolate(points, value):
     points = sorted(points)
@@ -106,12 +109,22 @@ class Protection:
         if self.fault or self.started is None:
             return self.fault
         swr = self.samples.get("swr")
-        if swr and swr[1] >= self.started and now - swr[1] <= 1.2 and swr[0] > 2.0:
+        if (
+            swr
+            and swr[1] >= self.started
+            and now - swr[1] <= FT8_TELEMETRY_TIMEOUT
+            and swr[0] > 2.0
+        ):
             return self.trip(f"SWR {swr[0]:.2f} > 2.0 — TX stopped")
         # Tuner carriers are generated/regulated inside the radio, not by our
         # audio encoder. The external-audio ALC guard applies to FT8 frames.
         alc = self.samples.get("alc")
-        if not self.tuning and alc and alc[1] >= self.started and now - alc[1] <= 1.2:
+        if (
+            not self.tuning
+            and alc
+            and alc[1] >= self.started
+            and now - alc[1] <= FT8_TELEMETRY_TIMEOUT
+        ):
             if alc[0] >= 1.0:
                 return self.trip("ALC too high — reduce TX audio")
             if alc[0] > 0.2:
@@ -121,7 +134,7 @@ class Protection:
                     return self.trip("ALC sustained — reduce TX audio")
             else:
                 self.alc_since = None
-        telemetry_timeout = 3.0 if self.tuning else 1.2
+        telemetry_timeout = 3.0 if self.tuning else FT8_TELEMETRY_TIMEOUT
         if now - self.started > telemetry_timeout:
             for name in (("swr",) if self.tuning else ("swr", "alc")):
                 sample = self.samples.get(name)

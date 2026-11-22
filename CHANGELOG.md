@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.12.1 — 2026-11-21
+
+- Use native 12 kHz mono PCM for Icom FT8 receive/transmit and 20 ms TX packets; preserve 48 kHz radio listening. Decode incoming 12 kHz audio directly and encode TX at the negotiated rate.
+- Stagger TX meter/state queries at 100 ms intervals (500 ms per meter), reduce pending PTT queries to 100 ms, and allow four polling rounds before a missing FT8 meter stops TX. Keep high SWR, excessive ALC, PTT, clock and connection protection.
+- Pace TX sample delivery against a monotonic deadline while retaining UTC clock-jump detection and stall shutdown.
+- Experimental reliability update: hardware RF output and sustained contact performance still require operator validation.
+
 ## 0.12.0 — 2026-11-21
 
 - Preserve an existing designated FT8 dial on entry; otherwise require band selection before setup/tuning/TX. Show the active band beside power and in the menu. Revalidate after reconnection without automatically resuming RF.

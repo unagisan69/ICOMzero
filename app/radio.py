@@ -17,6 +17,7 @@ from models import PROFILES, find_icom
 
 HEADER = struct.Struct("<IHHII")
 RATE = 48000
+FT8_RATE = 12000
 MODEL = "Network radio"
 CLIENT = b"ICOMzero"
 # Icom's positional substitution table for printable ASCII credentials.
@@ -252,6 +253,7 @@ def listen(
         )
     if model != "Auto (Icom)" and model not in PROFILES:
         raise RadioError("Choose a supported network radio")
+    stream_rate = FT8_RATE if tx_enabled else RATE
     user = encode(username)
     secret = encode(password)
     with ExitStack() as stack:
@@ -398,8 +400,8 @@ def listen(
                         ">IIIII",
                         body,
                         100,
-                        RATE,
-                        RATE if can_tx else 0,
+                        stream_rate,
+                        stream_rate if can_tx else 0,
                         cat_sock.getsockname()[1],
                         audio_sock.getsockname()[1],
                         150 if can_tx else 0,
@@ -583,6 +585,8 @@ def listen(
                                             civ.tx_ready,
                                             lambda: civ.ptt_state,
                                             lambda value: on_state("tx_status", value),
+                                            rate=stream_rate,
+                                            packet_ms=20,
                                             protection=civ.protection.check,
                                             off_confirmed=lambda: not civ.ptt_state
                                             and not civ.ptt_pending,

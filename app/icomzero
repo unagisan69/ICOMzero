@@ -22,7 +22,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from countries import message_country, activation_cq, short_country
 from models import MIN_HZ, MAX_HZ, DEFAULT_PROFILE, PROFILES, RADIO_CHOICES, presets
-from radio import RATE, RadioError, ConnectionLost, encode, listen
+from radio import FT8_RATE, RATE, RadioError, ConnectionLost, encode, listen
 
 FIELDS = ("Host", "Control port", "Username", "Password", "Radio", "Audio port", "Login")
 DEFAULTS = ("", "50001", "", "", "Auto (Icom)", "60001", "User")
@@ -949,7 +949,7 @@ def ft8_ui(lcd, keyboard):
         if not values[0]:
             return
     rx = Receiver()
-    decoder = Decoder()
+    decoder = Decoder(rate=RATE if read_config().get("Radio") == "TS-890S" else FT8_RATE)
     logbook = Logbook()
     rx.audio_observer = decoder.feed
     rx.play_audio = False

@@ -79,7 +79,7 @@ class TxEpisodes(unittest.TestCase):
         self.response(civ, 0)
         self.assertEqual(civ.protection.started, 10)
         self.assertTrue(civ.ptt_pending)
-        self.assertIn("telemetry lost", civ.protection.check(11.21))
+        self.assertIn("telemetry lost", civ.protection.check(12.01))
 
     def test_kenwood_ends_only_on_matching_rx_confirmation(self):
         from kenwood import Cat

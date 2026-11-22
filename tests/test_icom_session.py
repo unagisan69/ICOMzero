@@ -11,7 +11,7 @@ from civ import encode_frequency
 
 
 class StreamNegotiation(unittest.TestCase):
-    def run_radio(self, refusal, audio_delay=0):
+    def run_radio(self, refusal, audio_delay=0, tx_enabled=False):
         stop = threading.Event()
         errors, statuses, frames, state, requests = [], [], [], {}, []
         sockets = [socket.socket(socket.AF_INET, socket.SOCK_DGRAM) for _ in range(3)]
@@ -73,6 +73,11 @@ class StreamNegotiation(unittest.TestCase):
                                 reply(sock, addr, local, 0, body)
                             elif sock is control and kind == 0 and size == 144:
                                 requests.append(data[22:24])
+                                rates = struct.unpack_from(">II", data, 116)
+                                expected = 12000 if tx_enabled else 48000
+                                self.assertEqual(
+                                    rates, (expected, expected if tx_enabled else 0)
+                                )
                                 body = bytearray(64)
                                 if len(requests) == 1:
                                     body[32:36] = refusal.to_bytes(4, "big")
@@ -114,7 +119,7 @@ class StreamNegotiation(unittest.TestCase):
                             and time.monotonic() > max(audio_at, ready_after)
                         ):
                             addr, local = clients[audio]
-                            pcm = bytes(1920)
+                            pcm = bytes(480 if tx_enabled else 1920)
                             body = (
                                 b"\x80\x00"
                                 + struct.pack(">H", pcm_seq)
@@ -148,6 +153,7 @@ class StreamNegotiation(unittest.TestCase):
                 sample,
                 lambda v: state.update(frequency=v),
                 on_state=state.__setitem__,
+                tx_enabled=tx_enabled,
             )
         finally:
             stop.set()
@@ -169,3 +175,6 @@ class StreamNegotiation(unittest.TestCase):
 
     def test_first_audio_may_arrive_after_old_three_second_limit(self):
         self.run_radio(0, audio_delay=3.2)
+
+    def test_ft8_negotiates_native_twelve_khz_both_directions(self):
+        self.run_radio(0, tx_enabled=True)
