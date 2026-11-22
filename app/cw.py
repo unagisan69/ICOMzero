@@ -1,6 +1,7 @@
 """Receive-only, single-tone CW decoding with adaptive Morse timing."""
 
 from collections import deque
+import math
 import queue
 import threading
 import time
@@ -40,12 +41,17 @@ class Timing:
     """Learn one/three-unit marks and one/three/seven-unit gaps."""
 
     def __init__(self, text=""):
-        self.text = text
+        self.prefix = text
+        self.preview = ""
+        self.word_marks = []
+        self.word_gaps = []
+        self.pending_gap = None
+        self.dirty = True
         self.unit = 0.06
         self.learned = False
         self.history = deque(maxlen=64)
+        self.transitions = 0
         self.buffer = []
-        self.character = []
         self.down = False
         self.changed = 0.0
         self.candidate = False
@@ -85,30 +91,103 @@ class Timing:
         costs += 0.025 * np.abs(np.log(units / self.unit))
         return float(units[int(np.argmin(costs))])
 
+    @property
+    def text(self):
+        return (self.prefix + self.preview)[-1024:]
+
+    def gap_means(self):
+        gaps = [
+            d for mark, d in self.history if not mark and 0.015 <= d <= 4.5 * self.unit
+        ]
+        short = [d for d in gaps if d < 1.8 * self.unit]
+        long = [d for d in gaps if d >= 1.8 * self.unit]
+        intra = float(np.median(short)) if len(short) >= 4 else self.unit
+        letter = float(np.median(long)) if len(long) >= 2 else 3 * intra
+        return intra, letter
+
+    def word_gap(self):
+        _, letter = self.gap_means()
+        return max(3.5 * self.unit, min(5 * self.unit, 1.9 * letter))
+
+    def decode_word(self):
+        # Compare Morse-valid segmentations across a whole word. Uneven hand
+        # spacing must not permanently turn two letters into an invalid symbol.
+        # Costs use measured gaps only: no language dictionary or callsign guesses.
+        if not self.word_marks:
+            return ""
+        short, long = self.gap_means()
+        code = ["-" if d >= 2 * self.unit else "." for d in self.word_marks]
+        # Keep already-valid letter boundaries. Reconsider ambiguous timing only
+        # when the hard split produces a symbol outside the Morse alphabet.
+        hard = []
+        start = 0
+        for index, gap in enumerate(self.word_gaps):
+            if gap >= 2 * self.unit:
+                hard.append(LETTERS.get("".join(code[start : index + 1])))
+                start = index + 1
+        hard.append(LETTERS.get("".join(code[start:])))
+        if all(letter is not None for letter in hard):
+            return "".join(hard)
+        count = len(code)
+        best = [(float("inf"), "") for _ in range(count + 1)]
+        best[0] = (0.0, "")
+
+        def gap_cost(gap, between):
+            mean = long if between else short
+            return min(9.0, (math.log(gap / mean) / 0.5) ** 2)
+
+        for end in range(1, count + 1):
+            for start in range(max(0, end - 7), end):
+                letter = LETTERS.get("".join(code[start:end]))
+                if letter is None:
+                    continue
+                cost = best[start][0] + 0.4
+                if start:
+                    cost += gap_cost(self.word_gaps[start - 1], True)
+                for index in range(start, end - 1):
+                    cost += gap_cost(self.word_gaps[index], False)
+                if cost < best[end][0]:
+                    best[end] = (cost, best[start][1] + letter)
+        return best[-1][1] if best[-1][0] / count < 3 else "?"
+
     def append(self, value):
-        if value == " " and (not self.text or self.text.endswith(" ")):
-            return
-        self.text = (self.text + value)[-1024:]
+        if value == " ":
+            if self.word_marks:
+                self.prefix += self.decode_word()
+            self.word_marks = []
+            self.word_gaps = []
+            self.pending_gap = None
+            self.preview = ""
+            if self.prefix and not self.prefix.endswith(" "):
+                self.prefix += " "
+        else:
+            self.prefix += value
+        self.prefix = self.prefix[-1024:]
 
     def flush(self):
-        if self.character:
-            code = "".join(
-                "-" if duration >= 2 * self.unit else "." for duration in self.character
-            )
-            self.append(LETTERS.get(code, "?"))
-            self.character = []
+        if self.dirty:
+            self.preview = self.decode_word()
+            self.dirty = False
 
     def consume(self, mark, duration):
         if mark:
             if 0.018 <= duration <= 0.8:
-                self.character.append(duration)
+                if self.word_marks:
+                    self.word_gaps.append(self.pending_gap or self.unit)
+                self.pending_gap = None
+                self.word_marks.append(duration)
+                self.dirty = True
+                if len(self.word_marks) >= 64:
+                    self.append(" ")
             else:
-                self.character = []
-        else:
-            if duration >= 2 * self.unit:
-                self.flush()
-            if duration >= 5 * self.unit:
                 self.append(" ")
+        else:
+            if duration >= self.word_gap():
+                self.append(" ")
+            elif self.word_marks:
+                self.pending_gap = duration
+                if duration >= 2 * self.unit:
+                    self.flush()
 
     def transition(self, down, stamp):
         duration = stamp - self.changed
@@ -118,8 +197,10 @@ class Timing:
             if was_down:
                 self.last_mark = stamp
             self.history.append((was_down, duration))
+            self.transitions += 1
             if self.learned:
-                self.unit = 0.85 * self.unit + 0.15 * self.estimate()
+                if self.transitions % 4 == 0:
+                    self.unit = 0.8 * self.unit + 0.2 * self.estimate()
                 self.consume(was_down, duration)
             else:
                 self.buffer.append((was_down, duration))
@@ -141,7 +222,7 @@ class Timing:
             self.candidate, self.candidate_at = down, stamp
         if down != self.down and stamp - self.candidate_at >= 0.009:
             self.transition(down, self.candidate_at)
-        if not self.down and self.last_mark is not None:
+        if not self.down and not self.candidate and self.last_mark is not None:
             quiet = stamp - self.changed
             if (
                 not self.learned
@@ -156,30 +237,90 @@ class Timing:
             if self.learned:
                 if quiet >= 2.2 * self.unit:
                     self.flush()
-                if quiet >= 5 * self.unit:
+                if quiet >= self.word_gap():
                     self.append(" ")
 
 
 class Core:
-    """20 ms spectral windows, 10 ms timing; accepts mono signed 16-bit PCM."""
+    """20 ms spectral windows and 5 ms key timing; mono signed 16-bit PCM."""
 
     def __init__(self, rate=48000, text="", tone=None):
         if rate not in (12000, 48000):
             raise ValueError("CW audio must be 12 or 48 kHz")
+        if tone is not None and not 200 <= tone <= 2800:
+            raise ValueError("CW tone must be 200–2800 Hz")
         self.factor = rate // 12000
         self.raw = np.empty(0, dtype=np.float32)
         self.audio = np.empty(0, dtype=np.float32)
         self.window = np.hanning(240)
         self.bins = np.fft.rfftfreq(240, 1 / 12000)
         self.band = np.flatnonzero((self.bins >= 200) & (self.bins <= 2800))
+        if tone is not None:
+            self.band = self.band[abs(self.bins[self.band] - tone) <= 50]
         self.clock = 0.0
-        if tone is not None and not 200 <= tone <= 2800:
-            raise ValueError("CW tone must be 200–2800 Hz")
         self.fixed_tone = tone
-        self.pitch = float(tone) if tone is not None else None
+        self.tone_profile = np.zeros(len(self.bins))
+        self.pitch = None
         self.signal_at = -10.0
-        self.level = 0.0
+        self.candidate_pitch = None
+        self.candidate_at = 0
+        # Two seconds of spectra for a bounded noise floor and acquisition lookback.
+        self.frames = deque(maxlen=400)
+        self.floor = None
+        self.floor_tick = 0
         self.timing = Timing(text)
+
+    def measures(self, power, center):
+        carrier = float(power[center - 1 : center + 2].sum())
+        neighbors = np.concatenate(
+            (power[max(1, center - 8) : center - 2], power[center + 3 : center + 9])
+        )
+        noise = max(
+            float(np.percentile(neighbors, 60)),
+            float(np.median(power[max(1, center - 3) : center + 4])),
+            1e-10,
+        )
+        return carrier, noise
+
+    def detect(self, power, rms, stamp):
+        center = int(round(self.pitch / 50.0))
+        carrier, noise = self.measures(power, center)
+        # Averaging line shape rejects narrow receiver-noise bursts after a station stops.
+        self.tone_profile = 0.95 * self.tone_profile + 0.05 * power
+        profile_concentration = self.tone_profile[center - 1 : center + 2].sum() / max(
+            float(self.tone_profile[max(1, center - 3) : center + 4].sum()), 1e-10
+        )
+        concentration = carrier / max(
+            float(power[max(1, center - 3) : center + 4].sum()), 1e-10
+        )
+        keyed = (
+            carrier / noise > (10 if self.timing.down else 16)
+            and concentration > (0.65 if self.timing.down else 0.8)
+            and profile_concentration > 0.8
+            and rms > 0.0001
+        )
+        if keyed:
+            self.signal_at = stamp
+            near = np.arange(center - 1, center + 2)
+            k = int(near[np.argmax(power[near])])
+            a, b, c = np.log(np.maximum(power[k - 1 : k + 2], 1e-20))
+            offset = (
+                float(np.clip(0.5 * (a - c) / (a - 2 * b + c), -0.5, 0.5))
+                if a - 2 * b + c
+                else 0
+            )
+            target = (k + offset) * 50.0
+            coherent = (
+                carrier
+                / max(float(power[max(1, center - 3) : center + 4].sum()), 1e-10)
+                > 0.8
+            )
+            in_selection = (
+                self.fixed_tone is None or abs(target - self.fixed_tone) <= 75
+            )
+            if abs(target - self.pitch) <= 30 and coherent and in_selection:
+                self.pitch += 0.02 * (target - self.pitch)
+        self.timing.feed(bool(keyed), stamp)
 
     def feed(self, pcm):
         samples = np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32768
@@ -192,44 +333,67 @@ class Core:
         self.audio = np.concatenate((self.audio, samples))
         while len(self.audio) >= 240:
             frame = self.audio[:240]
-            self.audio = self.audio[120:]
-            power = np.abs(np.fft.rfft((frame - frame.mean()) * self.window)) ** 2
-            peak = int(self.band[np.argmax(power[self.band])])
-            noise = max(float(np.median(power[self.band])), 1e-10)
-            total = max(float(power[max(1, peak - 8) : peak + 9].sum()), 1e-10)
+            self.audio = self.audio[60:]
+            power = abs(np.fft.rfft((frame - frame.mean()) * self.window)) ** 2
             rms = float(np.sqrt(np.mean(frame * frame)))
-            if self.fixed_tone is None and (
-                self.pitch is None or self.clock - self.signal_at > 2
-            ):
-                if (
-                    power[peak] / noise > 30
-                    and power[max(0, peak - 1) : peak + 2].sum() / total > 0.85
-                    and rms > 0.0001
-                ):
-                    self.pitch = float(self.bins[peak])
-            keyed = False
-            if self.pitch is not None:
-                center = int(round(self.pitch / 50))
-                carrier = float(power[max(0, center - 1) : center + 2].sum())
-                local_total = max(
-                    float(power[max(1, center - 8) : center + 9].sum()), 1e-10
+            self.clock += 0.005
+            self.frames.append((power, rms, self.clock))
+            if self.pitch is None or self.clock - self.signal_at > 2:
+                self.floor_tick += 1
+                if len(self.frames) < 30:
+                    continue
+                if self.floor is None or self.floor_tick >= 20:
+                    self.floor = np.percentile(
+                        np.array([p for p, _, _ in self.frames]), 10, axis=0
+                    )
+                    self.floor_tick = 0
+                # Prefer keyed energy over a steady carrier elsewhere in the passband.
+                score = np.maximum(power - 3 * self.floor, 0)
+                peak = int(self.band[np.argmax(score[self.band])])
+                carrier, noise = self.measures(power, peak)
+                a, b, c = np.log(np.maximum(power[peak - 1 : peak + 2], 1e-20))
+                offset = (
+                    float(np.clip(0.5 * (a - c) / (a - 2 * b + c), -0.5, 0.5))
+                    if a - 2 * b + c
+                    else 0
                 )
-                self.level = max(carrier, self.level * 0.995)
-                keyed = (
-                    carrier / noise > (10 if self.timing.down else 16)
-                    and carrier > self.level * (0.025 if self.timing.down else 0.05)
-                    and carrier / local_total > (0.65 if self.timing.down else 0.8)
+                peak_hz = (peak + offset) * 50
+                concentration = carrier / max(
+                    float(power[max(1, peak - 3) : peak + 4].sum()), 1e-10
+                )
+                valid = (
+                    score[peak] > 0
+                    and concentration > 0.85
+                    and carrier / noise > 18
                     and rms > 0.0001
                 )
-                if keyed:
-                    self.signal_at = self.clock
+                if valid:
                     if (
-                        self.fixed_tone is None
-                        and abs(self.bins[peak] - self.pitch) <= 75
+                        self.candidate_pitch is None
+                        or abs(peak_hz - self.candidate_pitch) > 25
                     ):
-                        self.pitch = 0.95 * self.pitch + 0.05 * float(self.bins[peak])
-            self.clock += 0.01
-            self.timing.feed(bool(keyed), self.clock)
+                        self.candidate_pitch = peak_hz
+                        self.candidate_at = self.clock
+                    if self.clock - self.candidate_at >= 0.035:
+                        self.pitch = float(self.candidate_pitch)
+                        self.tone_profile.fill(0)
+                        self.timing = Timing(
+                            self.timing.text.rstrip() + " " if self.timing.text else ""
+                        )
+                        # Confirmation delays the lock, but must not cut off its first mark.
+                        for old_power, old_rms, stamp in self.frames:
+                            if stamp >= self.candidate_at - 0.04:
+                                self.detect(old_power, old_rms, stamp)
+                        self.candidate_pitch = None
+                        continue
+                else:
+                    self.candidate_pitch = None
+                # The old channel still flushes its final character while waiting.
+                if self.pitch is not None:
+                    self.detect(power, rms, self.clock)
+            else:
+                self.candidate_pitch = None
+                self.detect(power, rms, self.clock)
 
     def snapshot(self):
         return {
@@ -238,9 +402,17 @@ class Core:
             "wpm": round(1.2 / self.timing.unit) if self.timing.learned else None,
             "key": self.timing.down,
             "status": (
-                "Decoding"
-                if self.timing.learned
-                else "Learning speed" if self.pitch is not None else "Listening for CW"
+                "Listening for CW"
+                if self.clock - self.signal_at > 2
+                else (
+                    "Decoding"
+                    if self.timing.learned
+                    else (
+                        "Learning speed"
+                        if self.pitch is not None
+                        else "Listening for CW"
+                    )
+                )
             ),
         }
 

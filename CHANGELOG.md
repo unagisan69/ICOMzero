@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.16.3 — 2026-11-22
+
+- Stabilize CW tone acquisition with a bounded spectral history, keyed-energy selection, sub-bin pitch tracking and a short confirmation/lookback. Avoid latching onto a nearby steady carrier; reacquiring a tone resets its speed estimate.
+- Measure keying every 5 ms using a local noise floor and narrow tone checks. Remove the fixed peak-level gate that erased fading marks; retain receiver-noise rejection.
+- Repair invalid Morse groups using measured gaps across the word, while preserving already-valid letter boundaries; do not use an English dictionary or callsign guesses. Adapt word spacing and avoid premature boundaries while a rising edge is still being confirmed. In-progress words can revise as more Morse arrives.
+- Add receive-only regressions for weighted/compressed hand timing, fading, nearby interference, manual off-bin selection, tone/speed changes and receiver noise after a station stops.
+
 ## 0.16.2 — 2026-11-22
 
 - Make W toggle CW decoding without changing the radio’s demodulation mode, dial frequency or receive filter. Add an independent CW decoder toggle to Radio settings; native CW/CW-R remain explicit radio mode choices.

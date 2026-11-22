@@ -56,6 +56,55 @@ def recording(text="CQ TEST K1ABC 599", wpm=20, hz=600, noise=0.025, rate=48000)
     return (np.clip(samples, -1, 1) * 32767).astype("<i2").tobytes()
 
 
+def hand_recording(
+    text="CQ TEST K1ABC 599",
+    wpm=20,
+    gap_scale=1.0,
+    weight=0.0,
+    jitter=0.0,
+    hz=600,
+    seed=41,
+):
+    rng = np.random.default_rng(seed)
+    rate = 48000
+    unit = 1.2 / wpm
+    parts = [np.zeros(int(0.2 * rate))]
+
+    def silence(units):
+        duration = (
+            max(0.1, units * gap_scale - weight)
+            * unit
+            * rng.uniform(1 - jitter, 1 + jitter)
+        )
+        parts.append(np.zeros(round(duration * rate)))
+
+    for wi, word in enumerate(text.split()):
+        if wi:
+            silence(4)
+        for letter in word:
+            for index, symbol in enumerate(CODE[letter]):
+                if index:
+                    silence(1)
+                duration = (
+                    ((1 if symbol == "." else 3) + weight)
+                    * unit
+                    * rng.uniform(1 - jitter, 1 + jitter)
+                )
+                n = round(duration * rate)
+                envelope = np.ones(n)
+                ramp = min(96, n // 4)
+                envelope[:ramp] = np.linspace(0, 1, ramp)
+                envelope[-ramp:] = np.linspace(1, 0, ramp)
+                parts.append(
+                    0.35 * np.sin(2 * np.pi * hz * np.arange(n) / rate) * envelope
+                )
+            silence(3)
+    parts.append(np.zeros(round(1.7 * rate)))
+    x = np.concatenate(parts)
+    x += rng.normal(0, 0.015, len(x))
+    return (np.clip(x, -1, 1) * 32767).astype("<i2").tobytes()
+
+
 class CW(unittest.TestCase):
     def decode(self, pcm, rate=48000):
         core = Core(rate)
@@ -121,6 +170,64 @@ class CW(unittest.TestCase):
             core.feed(data[i : i + 1920])
         self.assertEqual(core.snapshot()["text"].strip(), "CQ TEST K1ABC 599")
         self.assertEqual(core.snapshot()["pitch"], 2000)
+
+    def test_weighted_marks_and_compressed_uneven_spacing(self):
+        for options in (
+            {"gap_scale": 0.65, "jitter": 0.12},
+            {"weight": 0.35, "jitter": 0.12},
+            {"weight": -0.2, "jitter": 0.1},
+        ):
+            with self.subTest(options=options):
+                self.assertEqual(
+                    self.decode(hand_recording(**options))["text"].strip(),
+                    "CQ TEST K1ABC 599",
+                )
+
+    def test_fading_does_not_split_dashes_or_erase_dots(self):
+        x = np.frombuffer(recording(hz=600), dtype="<i2").astype(float) / 32768
+        # About 18 dB of fading, independently of the keying pattern.
+        fade = 0.45 + 0.35 * np.sin(2 * np.pi * np.arange(len(x)) / 48000 / 0.9)
+        pcm = (np.clip(x * fade, -1, 1) * 32767).astype("<i2").tobytes()
+        self.assertEqual(self.decode(pcm)["text"].strip(), "CQ TEST K1ABC 599")
+
+    def test_nearby_carrier_does_not_steal_the_cw_tone(self):
+        x = np.frombuffer(recording(hz=600), dtype="<i2").astype(float) / 32768
+        x += 0.2 * np.sin(2 * np.pi * 850 * np.arange(len(x)) / 48000)
+        state = self.decode((np.clip(x, -1, 1) * 32767).astype("<i2").tobytes())
+        self.assertEqual(state["text"].strip(), "CQ TEST K1ABC 599")
+        self.assertLess(abs(state["pitch"] - 600), 10)
+
+    def test_manual_tone_finds_carrier_between_selector_steps(self):
+        core = Core(tone=700)
+        core.feed(recording(hz=747))
+        self.assertEqual(core.snapshot()["text"].strip(), "CQ TEST K1ABC 599")
+        self.assertLess(abs(core.snapshot()["pitch"] - 747), 10)
+
+    def test_new_tone_learns_its_own_speed(self):
+        state = self.decode(
+            recording(wpm=12, hz=600)
+            + bytes(48000 * 2 * 3)
+            + recording(wpm=30, hz=1200)
+        )
+        self.assertEqual(state["text"].strip(), "CQ TEST K1ABC 599 CQ TEST K1ABC 599")
+        self.assertLess(abs(state["wpm"] - 30), 4)
+
+    def test_receiver_noise_after_a_station_stops_adds_no_text(self):
+        for bandwidth in (250, 500):
+            chunks = [recording(hz=600)]
+            for seed in (0, 2, 315):
+                rng = np.random.default_rng(seed)
+                n = 48000 * 5
+                spectrum = np.fft.rfft(rng.normal(0, 1, n))
+                hz = np.fft.rfftfreq(n, 1 / 48000)
+                spectrum[(hz < 600 - bandwidth / 2) | (hz > 600 + bandwidth / 2)] = 0
+                noise = np.fft.irfft(spectrum, n)
+                noise = noise / np.std(noise) * 0.05
+                chunks.append((np.clip(noise, -1, 1) * 32767).astype("<i2").tobytes())
+            with self.subTest(bandwidth=bandwidth):
+                self.assertEqual(
+                    self.decode(b"".join(chunks))["text"].strip(), "CQ TEST K1ABC 599"
+                )
 
     def test_filtered_receiver_noise_does_not_decode_as_letters(self):
         for bandwidth in (250, 500):
