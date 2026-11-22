@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.16.0 — 2026-11-22
+
+- Add receive-only CW/CW-R Morse decoding to Radio. W enters/leaves CW, and S → Mode selects LSB/USB/CW/CW-R. Start decoding only after the radio confirms CW mode; pause on disconnect, tuning or PTT.
+- Display live decoded text, automatic tone and estimated speed beneath the waterfall. Use raw audio before volume/mute, a bounded background worker, adaptive spectral/envelope detection and Morse timing. Reset partial symbols across tuning, audio gaps and overruns.
+- Add CW receive band presets while preserving CW/CW-R on band changes. Icom CW modes request filter 2 and immediate mode readback; existing voice/FT8 controls remain unchanged.
+
 ## 0.15.0 — 2026-11-22
 
 - Redesign the startup menu with Radio, FT8 and Settings icon cards, the active radio name and app version.

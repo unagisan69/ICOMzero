@@ -27,7 +27,7 @@ def find_icom(name, address, selected="Auto (Icom)"):
     return candidates[0] if len(candidates) == 1 else None
 
 
-def presets(profile):
+def presets(profile, cw=False):
     customary = (
         ("160m", 1_900_000), ("80m", 3_750_000), ("60m", 5_357_000),
         ("40m", 7_150_000), ("30m", 10_125_000), ("20m", 14_200_000),
@@ -36,6 +36,12 @@ def presets(profile):
         ("2m", 144_200_000), ("70cm", 432_200_000), ("23cm", 1_296_200_000),
         ("13cm", 2_400_200_000), ("6cm", 5_760_200_000), ("3cm", 10_368_200_000),
     )
+    if cw:
+        cw_hz = {"160m":1825000,"80m":3525000,"60m":5357000,"40m":7025000,
+                 "30m":10110000,"20m":14025000,"17m":18080000,"15m":21025000,
+                 "12m":24895000,"10m":28025000,"6m":50090000,"4m":70090000,
+                 "2m":144050000,"70cm":432050000}
+        customary = tuple((name,cw_hz.get(name,hz)) for name,hz in customary)
     ranges = profile["bands"]
     return tuple((name, hz) for name, hz in customary
                  if any(start <= hz <= end for _, start, end in ranges)) or customary[:11]

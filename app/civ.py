@@ -444,8 +444,9 @@ class Civ:
                         + (b"" if value is None else bytes.fromhex(f"{value:04d}")),
                         urgent=True,
                     )
-                elif action == "mode" and value in (0, 1, 3, 5):
-                    self.schedule(bytes((6, value, 1)), urgent=True)
+                elif action == "mode" and value in (0, 1, 3, 5, 7):
+                    self.schedule(b"\x04", urgent=True)
+                    self.schedule(bytes((6, value, 2 if value in (3, 7) else 1)), urgent=True)
                 elif action == "nr" and self.profile["nr"]:
                     if self.nr is None:
                         self.toggle_nr = not self.toggle_nr

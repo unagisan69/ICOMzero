@@ -313,6 +313,9 @@ class Receiver:
 
     def change_band(self, hz):
         self.tune(hz)
+        if self.radio_state.get("mode") in (3, 7):
+            self.command("mode", self.radio_state["mode"])
+            return
         # HF voice convention uses LSB on 160/80/40 m and USB on other presets.
         self.command("mode", 0 if hz < 10_000_000 and hz != 5_357_000 else 1)
 
@@ -406,7 +409,7 @@ class Display:
         self.history.paste(row.convert("RGB"), (0, 0))
 
     def render(self, values, selected, editing, status, volume, busy, frequency,
-               scope, band, volume_visible, radio_state=None, help_open=False, radio_menu=None, step=1000):
+               scope, band, volume_visible, radio_state=None, help_open=False, radio_menu=None, step=1000, cw=None):
         image = Image.new("RGB", (WIDTH, HEIGHT), BG)
         draw = ImageDraw.Draw(image)
 
@@ -418,7 +421,7 @@ class Display:
 
         self.update_waterfall(scope)
         profile = (radio_state or {}).get("profile", DEFAULT_PROFILE)
-        bands = presets(profile)
+        bands = presets(profile, cw=(radio_state or {}).get("mode") in (3,7))
         if selected is not None:
             label(12, 7, "Setup", "title")
             label(185, 14, (radio_state or {}).get("model", "Network radio"), "small", MUTED)
@@ -479,10 +482,32 @@ class Display:
                 label(253, 138, f"{end / 1e6:.3f}", "small", MUTED)
             else:
                 wait = "Waiting for scope data" if status == "Receiving audio" else status
-                label(22, 91, wait, color=MUTED)
+                label(22, 74 if cw is not None else 91, wait, color=MUTED)
             label(12, 155, "Ent - ■" if busy else "Ent - ▶", "small", MUTED)
             label(110, 155, "S - Settings", "small", MUTED)
             label(240, 155, "Tab - Help", "small", MUTED)
+        if cw is not None and band is None:
+            draw.rounded_rectangle((8, 94, 312, 152), 5, fill="#111f2d", outline="#355361")
+            detail = f"~{cw['pitch']} Hz" if cw.get("pitch") else "Listening for CW"
+            if cw.get("wpm"):
+                detail += f" · ~{cw['wpm']} WPM"
+            elif cw.get("pitch"):
+                detail += " · Learning speed"
+            label(14, 96, "CW  " + detail, "small", GREEN)
+            draw.ellipse((293,99,300,106),fill=GREEN if cw.get("key") else CARD)
+            lines = []
+            line = ""
+            for word in (cw.get("text", "") + "▏").split():
+                candidate = line + (" " if line else "") + word
+                if line and draw.textlength(candidate, font=self.fonts["small"]) > 289:
+                    lines.append(line); line = ""
+                for char in ((" " if line else "") + word):
+                    if draw.textlength(line + char, font=self.fonts["small"]) > 289:
+                        lines.append(line); line = ""
+                    line += char
+            lines.append(line)
+            for row, text in enumerate(lines[-3:]):
+                label(14, 110 + row * 13, text, "small", WHITE)
         if volume_visible:
             image = notice_popup(self, image, "Volume", f"{volume}%")
             draw = ImageDraw.Draw(image)
@@ -497,7 +522,7 @@ class Display:
                 ("T", "Antenna tune (transmits)" if profile["tuner"] and profile["transmit"] else "No antenna tuner"),
                 ("Fn + S / D", "Volume down / up"),
                 ("Fn + A", "Mute / unmute"),
-                ("Enter", "Play / stop"),
+                ("W", "CW decoder on / off"),
                 ("S / Esc", "Radio settings / menu"),
             )
             for index, (key, action) in enumerate(shortcuts):
@@ -506,10 +531,10 @@ class Display:
                 label(101, y, action, "small")
             label(18, 149, "Tab / Esc - Close help", "small", MUTED)
         if radio_menu is not None:
-            draw.rounded_rectangle((10, 27, 310, 143), 8, fill=BG, outline=GREEN)
+            draw.rounded_rectangle((10, 23, 310, 153), 8, fill=BG, outline=GREEN)
             label(22, 34, "Radio settings", color=GREEN)
-            for index, text in enumerate(("Band", f"Tuning step: {step} Hz", "Back")):
-                y = 64 + index * 22
+            for index, text in enumerate(("Band", f"Tuning step: {step} Hz", "Mode: " + {0:"LSB",1:"USB",3:"CW",7:"CW-R"}.get((radio_state or {}).get("mode"),"USB"), "Back")):
+                y = 55 + index * 23
                 if radio_menu == index:
                     draw.rounded_rectangle((18, y-2, 302, y+18), 4, fill=CARD)
                 label(27, y, text, "small", GREEN if radio_menu == index else WHITE)
@@ -533,6 +558,7 @@ class Display:
 
 def ui(lcd, keyboard):
     from settings_ui import SettingsScreens
+    from cw import Decoder as CWDecoder
     display = Display(lcd)
     values = load()
     if not values[0]:
@@ -541,6 +567,9 @@ def ui(lcd, keyboard):
         if not values[0]:
             return
     rx = Receiver()
+    cw_decoder = CWDecoder(rate=RATE)
+    rx.audio_observer = cw_decoder.feed
+    cw_return_mode = 1
     shift = set()
     fn = False
     held_tune = None
@@ -564,14 +593,17 @@ def ui(lcd, keyboard):
             if held_tune is not None and now >= next_repeat:
                 rx.tune(steps=-1 if held_tune in (44, 105) else 1)
                 next_repeat = now + 0.09
-            bands = presets(rx.radio_state.get("profile", DEFAULT_PROFILE))
+            cw_active = rx.busy() and rx.radio_state.get("mode") in (3, 7) and not rx.radio_state.get("ptt") and rx.radio_state.get("tuner") != 2
+            cw_decoder.configure(cw_active, (rx.session_revision, rx.frequency, rx.radio_state.get("mode")))
+            cw_state = cw_decoder.snapshot() if cw_active else None
+            bands = presets(rx.radio_state.get("profile", DEFAULT_PROFILE), cw=cw_active)
             busy = rx.busy()
             if not busy:
                 band = None
             scope = rx.scope if busy and rx.scope and now - rx.scope[0] < 2 else None
             state = (tuple(values), None, False, rx.status, 0 if rx.muted else rx.volume, busy,
                      rx.displayed_frequency() if busy else None, scope, band, now < volume_until,
-                     rx.radio_state, help_open, radio_menu, rx.step)
+                     rx.radio_state, help_open, radio_menu, rx.step, cw_state)
             if now >= next_paint and (state != redraw or now < initial):
                 display.render(*state)
                 redraw = state
@@ -605,7 +637,7 @@ def ui(lcd, keyboard):
                     if key in (1, 15, 31):
                         radio_menu = None
                     elif key in (33, 44, 103, 105, 45, 46, 108, 106):
-                        radio_menu = (radio_menu + (-1 if key in (33,44,103,105) else 1)) % 3
+                        radio_menu = (radio_menu + (-1 if key in (33,44,103,105) else 1)) % 4
                     elif key == 28:
                         if radio_menu == 0:
                             if busy and rx.frequency:
@@ -617,6 +649,13 @@ def ui(lcd, keyboard):
                             rx.step = STEPS[(STEPS.index(rx.step) + 1) % len(STEPS)]
                             store = ProfileStore(CONFIG)
                             store.update(store.active()["id"], step=rx.step)
+                        elif radio_menu == 2:
+                            modes = (0, 1, 3, 7)
+                            mode = rx.radio_state.get("mode", 1)
+                            wanted = modes[(modes.index(mode) + 1) % len(modes)] if mode in modes else 1
+                            if wanted in (3, 7) and mode in (0, 1):
+                                cw_return_mode = mode
+                            rx.command("mode", wanted)
                         else:
                             radio_menu = None
                     continue
@@ -647,6 +686,15 @@ def ui(lcd, keyboard):
                     rx.tune(steps=-1 if key in (44, 105) else 1)
                     held_tune = key
                     next_repeat = time.monotonic() + 0.35
+                elif key == 17:
+                    mode = rx.radio_state.get("mode")
+                    if mode in (3, 7):
+                        rx.command("mode", cw_return_mode)
+                    elif busy:
+                        cw_return_mode = mode if mode in (0, 1) else 1
+                        rx.command("mode", 3)
+                    else:
+                        rx.update("Connect first to select CW")
                 elif key == 50:
                     rx.command("mode", 1 if rx.radio_state.get("mode") == 0 else 0)
                 elif key == 49:
@@ -669,6 +717,7 @@ def ui(lcd, keyboard):
         rx.stop.set()
         if rx.thread is not None:
             rx.thread.join(timeout=2)
+        cw_decoder.close()
 
 def menu_frame(display, title, subtitle):
     image = Image.new("RGB", (WIDTH, HEIGHT), BG)

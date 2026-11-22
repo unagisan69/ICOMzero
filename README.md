@@ -27,12 +27,12 @@ Connect the Cardputer to a network that can reach the radio and enable the radio
 For manual installation, download the `.deb` from [GitHub Releases](https://github.com/unagisan69/ICOMzero/releases), then install it on the Cardputer.
 
 ```sh
-sudo apt install ./icomzero_0.15.0-1_arm64.deb
+sudo apt install ./icomzero_0.16.0-1_arm64.deb
 ```
 
 Open **ICOMzero** from APPLaunch after installation.
 
-Version 0.15.0 includes the hardware-validated IC-7300MK2 FT8 reliability updates: continuous 12 kHz audio, a 300 ms transmit buffer with matching PTT drain, complete packet-loss repair, and bounded control recovery. The FT8 status bar keeps the armed dot and TX/SWR/power indicators without AUTO or POTA text labels. Successful contacts are saved locally and uploaded independently to enabled logging services. Radio listening remains at 48 kHz. Compare the radio’s own power/SWR/ALC meters with the app; nominal power is a control setting, not a guarantee of measured RF output.
+Version 0.16.0 includes the hardware-validated IC-7300MK2 FT8 reliability updates: continuous 12 kHz audio, a 300 ms transmit buffer with matching PTT drain, complete packet-loss repair, and bounded control recovery. The FT8 status bar keeps the armed dot and TX/SWR/power indicators without AUTO or POTA text labels. Successful contacts are saved locally and uploaded independently to enabled logging services. Radio listening remains at 48 kHz. Compare the radio’s own power/SWR/ALC meters with the app; nominal power is a control setting, not a guarantee of measured RF output.
 
 ## Listen
 
@@ -40,15 +40,25 @@ Version 0.15.0 includes the hardware-validated IC-7300MK2 FT8 reliability update
 2. Enter the radio's name, IPv4 address or hostname, ports, username and password. **F/X** or arrows select fields; **Enter** opens a text field or model/login picker. Enter saves an edited field; Esc cancels that edit or returns to the previous screen. Backspace erases and **Del** clears a text field. **SYM+B** enters a dot. **Auto (Icom)** identifies a supported Icom from its name or CI-V address; choose an exact model for a custom radio name/address.
    - Icom uses control port **50001** by default. Keep its normal negotiated audio ports.
    - TS-890S uses **60000** for TCP control and **60001** for UDP audio. Selecting TS-890S switches the default control port. Set **Login** to **User** or **Admin** to match the account configured on the radio. Its 16 kHz LPCM audio is converted to the app's 48 kHz speaker stream.
-3. Choose **Radio**, then press **Enter** to start or stop listening. **Z** and **C** tune down and up at the saved tuning step. Hold either key to scroll. Press **B** for band presets, select with **Z** or **C**, then press **Enter** to tune to the displayed frequency. The menu shows presets within the connected model’s frequency ranges. Band presets select LSB on 160/80/40 m and USB on the remaining presets.
+3. Choose **Radio**, then press **Enter** to start or stop listening. **Z** and **C** tune down and up at the saved tuning step. Hold either key to scroll. Press **B** for band presets, select with **Z** or **C**, then press **Enter** to tune to the displayed frequency. The menu shows presets within the connected model’s frequency ranges. Voice band presets select LSB on 160/80/40 m and USB on the remaining presets. CW/CW-R uses CW receive presets and preserves the current CW mode.
 4. Use **Fn+S** to lower the volume and **Fn+D** to raise it. Hold Fn while pressing S or D repeatedly. **Fn+A** toggles mute. The volume appears briefly as you adjust it, and volume and mute are saved for the next launch.
 5. **N** toggles the radio’s noise reduction where supported. **T** starts its antenna tuner, which briefly transmits a tuning carrier. T is inactive on receiver-only radios and models without a tuner command. The top line shows the current mode, NR when enabled, and TUNING during a tuner operation. Press **M** to switch USB/LSB. Press **Esc** to return to the main menu.
 
 The waterfall uses the radio’s scope span and center or fixed-range settings. Icom radios negotiate secondary UDP ports. Kenwood audio arrives on the configured UDP audio port. Keep the radio and Cardputer on the same LAN. Temporarily refused/zero-port stream replies trigger fresh stream transactions with bounded backoff, using the existing login. Login, secondary-channel setup and CI-V startup have separate time budgets. Address-change and other socket errors enter the bounded reconnect path, including Wi-Fi roaming/DHCP changes. A recovered session requests RX, retains any latched RF fault, and does not restart FT8 transmission or an automatic tuner carrier. FT8 revalidates the entry band after reconnecting. Peer-closed control, CAT and audio channels retain their channel-specific reason instead of a generic Disconnected message. Connection failures retain their underlying reason on screen and in a bounded private `~/.config/icomzero/connection-diagnostics.jsonl` file (no credentials or packet payloads). If the radio is busy, disconnect the other LAN client and try again. Settings are saved in `~/.config/icomzero/radio.json` (or under `$XDG_CONFIG_HOME`) with user-only permissions. The password is stored in that file as text and encoded using Icom's LAN protocol on the wire.
 
-Press **S** on the receiver screen for **Band** and **Tuning step**. Enter on Tuning step cycles **1000, 500 and 100 Hz**; the choice is saved per radio and applies to tap/hold tuning. Reception continues while this menu is open. Connection settings now live in the main **Settings → Radios** menu.
+Press **S** on the receiver screen for **Band**, **Tuning step**, and **Mode** (LSB / USB / CW / CW-R). Enter on Tuning step cycles **1000, 500 and 100 Hz**; the choice is saved per radio and applies to tap/hold tuning. Reception continues while this menu is open. Connection settings now live in the main **Settings → Radios** menu.
 
 Press **Tab** on the receiver screen to open the keyboard shortcut guide. **Tab** or **Esc** closes it.
+
+## CW receive decoder
+
+While listening in **Radio**, press **W** to select CW and start the receive-only software decoder after mode confirmation. W again returns to the preceding sideband. **S → Mode** also selects **CW** or **CW-R**; M still selects USB/LSB. Band selection preserves CW/CW-R and offers CW receive frequencies. A **100 Hz** tuning step helps center a station. Icom CW requests filter 2; its actual bandwidth follows the radio’s filter configuration.
+
+The panel beneath the waterfall shows the newest decoded text, detected tone and estimated character speed. A green dot follows the received tone. Audio is decoded before speaker volume/mute processing, so Fn+A can silence the speaker without stopping decoding. This function does not key the radio, send Morse, reply or log CW contacts. Changing frequency/mode or reconnecting resets partial characters; missing audio triggers resynchronization.
+
+The automatic detector searches roughly **300–1400 Hz**. It uses [standard Morse timing](https://www.arrl.org/files/file/Technology/x9004008.pdf) and was tested with generated noisy audio at **8–35 WPM**. Tune a clear, single CW signal and use an appropriate narrow receive filter. Mixed stations, QRM, deep fading and irregular hand spacing can cause errors; unknown symbols appear as question marks. Speed is an estimate, not a measured overall QSO rate.
+
+![CW receive decoder](docs/images/cw.png)
 
 ## App settings and updates
 
@@ -124,7 +134,7 @@ sudo apt install build-essential python3-pil python3-numpy
 make check
 make test
 make package
-sudo apt install ./build/icomzero_0.15.0-1_arm64.deb
+sudo apt install ./build/icomzero_0.16.0-1_arm64.deb
 ```
 
 Use `make package APPBUILDER=/path/to/AppBuilder` for another checkout location. The package includes a foreground APPLaunch entry and declares its Python, Pillow, NumPy, font, ALSA, and PipeWire dependencies.
