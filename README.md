@@ -42,7 +42,7 @@ Use **Settings → Check for updates** for the latest stable GitHub release. The
 For manual installation, download the ARM64 package from [GitHub Releases](https://github.com/unagisan69/ICOMzero/releases/latest). Close ICOMzero before installing:
 
 ```sh
-sudo apt install ./icomzero_0.16.7-1_arm64.deb
+sudo apt install ./icomzero_0.17.0-1_arm64.deb
 ```
 
 After an update, fully close and reopen the app to load the new version. [Update details →](docs/USER_GUIDE.md#app-settings-and-updates)
