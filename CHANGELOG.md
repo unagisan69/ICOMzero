@@ -3,7 +3,7 @@
 ## 0.16.5 — 2026-11-23
 
 - Simplify the FT8 footer with compact rounded controls; show TX and SWR only while armed or transmitting. Preserve its height and red transmit progress.
-- Put decode signal strength after the region label, with both details dimmed so the message remains prominent.
+- Put decode signal strength directly after the Maidenhead grid locator in a smaller font; dim the locator and signal details so the message remains prominent. Keep country/state separately on the right.
 - Give the RRR acknowledgment stage four unanswered attempts, including hunted stations, before moving on. Continue immediately when the other station sends 73.
 - Re-send a final 73 when a recently completed station repeats RRR/RR73, then resume the interrupted exchange without resetting its attempt count or creating another QSO log. Bound acknowledgment history and queued replies; normal TX safety checks still apply.
 
