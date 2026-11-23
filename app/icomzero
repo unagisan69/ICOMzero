@@ -35,6 +35,8 @@ EVENT = struct.Struct("@llHHi")
 WIDTH, HEIGHT = 320, 170
 BG, CARD, WHITE, MUTED, GREEN = "#101a21", "#1d2d36", "#f0f6f6", "#9bb2bb", "#70edbb"
 TUNE_STEP = 1000
+SETUP_RECOVERY_SECONDS = 90
+SETUP_MAX_FAILURES = 16
 WATERFALL_W, WATERFALL_H = 296, 70
 KEY_CARDPUTER_FN = 389
 KEY_FN, KEY_FN_D, KEY_FN_S = 0x1D0, 0x1E0, 0x1E3
@@ -156,6 +158,14 @@ class Receiver:
         last_start = 0
         startup_deadline = None
         failures = 0
+        ever_ready = False
+        setup_deadline = time.monotonic() + SETUP_RECOVERY_SECONDS
+        last_setup_error = None
+
+        def connection_status(status):
+            if failures and status in ("Finding radio", "Signing in", "Opening RX stream"):
+                status += f" · retry {failures}"
+            self.update(status)
 
         def start_player():
             return subprocess.Popen(
@@ -167,13 +177,14 @@ class Receiver:
 
         try:
             def play(pcm):
-                nonlocal player, last_start, startup_deadline, failures
+                nonlocal player, last_start, startup_deadline, failures, ever_ready
+                if self.frequency is not None and "mode" in self.radio_state:
+                    failures = 0
+                    ever_ready = True
                 if self.audio_observer is not None:
                     self.audio_observer(pcm)
                 if not self.play_audio:
                     self.packets += 1
-                    if self.frequency is not None and "mode" in self.radio_state:
-                        failures = 0
                     self.update("Receiving audio")
                     return
                 now = time.monotonic()
@@ -193,8 +204,6 @@ class Receiver:
                     last_start = now
                 fd = player.stdin.fileno()
                 self.packets += 1
-                if self.frequency is not None and "mode" in self.radio_state:
-                    failures = 0
                 volume = 0 if self.muted else self.volume
                 if volume != 100:
                     samples = np.frombuffer(pcm, dtype="<i2").astype(np.int32)
@@ -213,9 +222,12 @@ class Receiver:
 
             while not self.stop.is_set():
                 try:
+                    if (not ever_ready and last_setup_error
+                            and time.monotonic() >= setup_deadline):
+                        raise RadioError("Connection failed: " + last_setup_error)
                     startup_deadline = None
                     self.session_revision += 1
-                    listen(*settings, self.stop, self.update, play,
+                    listen(*settings, self.stop, connection_status, play,
                            self.frequency_changed, self.scope_changed, self.take_tune,
                            self.take_commands, self.radio_state_changed,
                            model=self.session_config.get("Radio", "Auto (Icom)"),
@@ -223,14 +235,18 @@ class Receiver:
                                        if self.session_config.get("Radio") == "TS-890S" else 60001),
                            admin=self.session_config.get("Login") == "Admin",
                            tx_enabled=self.tx_enabled, take_tx=self.take_tx,
-                           on_audio_gap=self.audio_gap)
+                           on_audio_gap=self.audio_gap,
+                           connect_deadline=None if ever_ready else setup_deadline)
                     break
                 except (ConnectionLost, OSError) as error:
                     from radio import connection_diagnostic
                     connection_diagnostic(error, self.status)
                     self.stop_tx()
                     failures += 1
-                    if failures > 3:
+                    last_setup_error = str(error)
+                    if ((ever_ready and failures > 3) or
+                            (not ever_ready and (time.monotonic() >= setup_deadline
+                             or failures >= SETUP_MAX_FAILURES))):
                         raise RadioError("Connection failed: " + str(error))
                     self.scope = None
                     with self.tune_lock:
@@ -242,8 +258,14 @@ class Receiver:
                             self.commands.append(("force_rx", None))
                             if fault:
                                 self.commands.append(("tx_fault", fault))
-                    self.update(f"Reconnecting ({failures}/3)")
-                    if self.stop.wait(min(2.0, 0.5 * failures)):
+                    if ever_ready:
+                        self.update(f"Reconnecting ({failures}/3)")
+                        delay = min(2.0, .5 * failures)
+                    else:
+                        self.update(f"Retrying radio setup ({failures})")
+                        delay = min(8.0, .5 * 2 ** min(failures-1, 4),
+                                    max(0, setup_deadline-time.monotonic()))
+                    if self.stop.wait(delay):
                         break
             self.update("Disconnected")
         except (RadioError, OSError) as error:
@@ -251,6 +273,14 @@ class Receiver:
             if not str(error).startswith("Connection failed: "):
                 connection_diagnostic(error, self.status)
             self.update(str(error) if isinstance(error, RadioError) else f"Connection error: {error.strerror}")
+        except Exception as error:
+            # A failed worker must not leave the UI frozen at its previous phase.
+            # Unexpected exception messages may contain input data; retain only type.
+            from radio import connection_diagnostic
+            reason = "Connection error (" + type(error).__name__ + ")"
+            connection_diagnostic(reason, self.status)
+            self.stop_tx()
+            self.update(reason)
         finally:
             if player is not None:
                 player.stdin.close()

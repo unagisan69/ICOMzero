@@ -20,6 +20,7 @@ class StreamNegotiation(unittest.TestCase):
         repair_range=False,
         refusals=1,
         audio_gap=False,
+        drop_capabilities=False,
     ):
         stop = threading.Event()
         errors, statuses, frames, state, requests = [], [], [], {}, []
@@ -35,6 +36,7 @@ class StreamNegotiation(unittest.TestCase):
         audio_at = 0
         pcm_seq = 65535 if audio_gap else 0
         audio_events = []
+        capabilities_requests = []
         audio_idles = []
         suspended = reopened = False
         open_count = 0
@@ -104,6 +106,12 @@ class StreamNegotiation(unittest.TestCase):
                                 and size == 64
                                 and data[21] == 2
                             ):
+                                capabilities_requests.append(data)
+                                if (
+                                    drop_capabilities
+                                    and len(capabilities_requests) == 1
+                                ):
+                                    continue
                                 body = bytearray(152)
                                 body[50:66] = bytes(range(16))
                                 name = b"IC-7300MK2"
@@ -235,6 +243,9 @@ class StreamNegotiation(unittest.TestCase):
                 sock.close()
         self.assertFalse(errors, errors)
         self.assertTrue(frames)
+        if drop_capabilities:
+            self.assertGreaterEqual(len(capabilities_requests), 2)
+            self.assertEqual(capabilities_requests[0], capabilities_requests[1])
         if audio_gap:
             self.assertEqual(audio_events.count("gap"), 1)
             self.assertEqual(audio_events[:3], ["audio", "gap", "audio"])
@@ -252,6 +263,24 @@ class StreamNegotiation(unittest.TestCase):
             self.assertGreaterEqual(open_count, 2)
             self.assertIsNotNone(state.get("civ_recovered_at"))
             self.assertFalse(state["civ_recovering"])
+
+    def test_lost_capability_request_is_retried_without_relogin(self):
+        self.run_radio(0, drop_capabilities=True)
+
+    def test_expired_setup_deadline_stops_discovery(self):
+        from radio import ConnectionLost
+
+        with self.assertRaisesRegex(ConnectionLost, "Radio setup recovery timed out"):
+            listen(
+                "127.0.0.1",
+                59999,
+                "user",
+                "password",
+                threading.Event(),
+                lambda _: None,
+                lambda _: None,
+                connect_deadline=time.monotonic() - 1,
+            )
 
     def test_missing_audio_sequence_resyncs_before_pcm_including_wraparound(self):
         self.run_radio(0, audio_gap=True)

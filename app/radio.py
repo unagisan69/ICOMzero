@@ -258,6 +258,7 @@ def listen(
     tx_enabled=False,
     take_tx=lambda: None,
     on_audio_gap=lambda: None,
+    connect_deadline=None,
 ):
     if model == "TS-890S":
         from kenwood import listen as listen_kenwood
@@ -280,6 +281,7 @@ def listen(
             tx_enabled,
             take_tx,
             on_audio_gap,
+            connect_deadline,
         )
     if model != "Auto (Icom)" and model not in PROFILES:
         raise RadioError("Choose a supported network radio")
@@ -369,20 +371,33 @@ def listen(
                             "Local network address changed; reconnecting"
                         )
                     network_check_at = now + 0.5
+                ready = (
+                    last_pcm is not None
+                    and civ is not None
+                    and civ.frequency is not None
+                    and civ.mode is not None
+                )
+                if ready:
+                    # The startup budget must never become an active-session timer.
+                    connect_deadline = None
+                if connect_deadline is not None and now >= connect_deadline:
+                    raise ConnectionLost("Radio setup recovery timed out")
                 if now > deadline:
-                    raise ConnectionLost(
-                        "Audio stream timed out"
-                        if last_pcm is not None
-                        else (
-                            "Audio channel handshake timed out"
-                            if audio
-                            else (
-                                "RX stream setup timed out"
-                                if stream_attempts
-                                else "Radio login/setup timed out"
-                            )
-                        )
-                    )
+                    if last_pcm is not None:
+                        reason = "Audio stream timed out"
+                    elif audio is not None:
+                        reason = "Audio channel handshake timed out"
+                    elif stream_attempts:
+                        reason = "RX stream setup timed out"
+                    elif not control.remote:
+                        reason = "Radio discovery timed out (no reply)"
+                    elif not control.ready:
+                        reason = "Control handshake timed out"
+                    elif not authenticated:
+                        reason = "Radio login response timed out"
+                    else:
+                        reason = "Radio capabilities response timed out"
+                    raise ConnectionLost(reason)
                 for channel in (control, cat, audio):
                     if channel:
                         channel.tick(now)
@@ -524,10 +539,16 @@ def listen(
                             if struct.unpack_from("<H", data, 26)[0] == request_id:
                                 token = data[28:32]
                                 authenticated = True
-                                phase_packet = None
                                 send_token(2)
+                                phase_packet = control.history[
+                                    (control.seq - 1) & 0xFFFF
+                                ]
+                                phase_retry = now + 0.8
+                                phase_attempts = 0
+                                deadline = now + 8
                                 renewal = now + 60
                         if size >= 168 and (size - 66) % 102 == 0:
+                            phase_packet = None
                             for offset in range(66, size, 102):
                                 name = data[offset + 16 : offset + 48].split(b"\0", 1)[
                                     0

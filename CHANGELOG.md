@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Recover initial radio setup across transient discovery/login failures within a 90-second startup budget, with capped backoff, cancellation and visible retry progress. Disarm the startup deadline once audio and control are ready; retain the existing established-session reconnect and TX-stop behavior.
+- Retry a lost Icom capability request without a new login. Distinguish discovery, control handshake, login and capability response timeouts.
+- Show unexpected connection-worker failures on screen instead of leaving the previous setup label frozen, while excluding exception input details from private diagnostics.
+
 ## 0.16.4 — 2026-11-22
 
 - Refresh the README feature overview, navigation and screenshots; move detailed operating instructions into a linked user guide and update the App Store listing.
