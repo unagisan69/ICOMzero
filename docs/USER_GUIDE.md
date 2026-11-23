@@ -29,7 +29,7 @@ Connect the Cardputer to a network that can reach the radio and enable the radio
 For manual installation, download the `.deb` from [GitHub Releases](https://github.com/unagisan69/ICOMzero/releases), then install it on the Cardputer.
 
 ```sh
-sudo apt install ./icomzero_0.16.6-1_arm64.deb
+sudo apt install ./icomzero_0.16.7-1_arm64.deb
 ```
 
 Open **ICOMzero** from APPLaunch after installation.
@@ -79,7 +79,7 @@ Choose **FT8** from the startup menu. Reception starts silently on the radio’s
 
 - **F / Fn+F** selects the previous decode; **X / Fn+X** selects the next. Hold to move through history one line at a time. Selection stays on the same decode when new messages arrive. Scrolling down to the newest line clears selection and resumes automatic scrolling.
 - **Enter** replies to or continues the highlighted recent contact. Selection clears after replying and the display returns to the newest decodes.
-- **Tab – Menu** opens Bands, Call CQ, Auto CQ, POTA Hunt, Settings, Stop Transmit, Logging, Record QSO, Tune antenna and Help. With a decode highlighted, Call CQ is displayed as **Reply / continue** and uses that station’s latest relevant message.
+- **Tab – Menu** opens Auto CQ, Bands, Call CQ, POTA Hunt, Settings, Stop Transmit, Logging, Record QSO, Tune antenna and Help. With a decode highlighted, Call CQ is displayed as **Reply / continue** and uses that station’s latest relevant message.
 - **Esc** returns to the main menu and stops transmission.
 
 ### Station and transmit setup
@@ -88,7 +88,7 @@ In **Settings**, enter your callsign and Maidenhead grid (four or six characters
 
 ### Auto CQ
 
-**Auto CQ**, directly under Call CQ, explicitly starts an automatic session. It sends **one own CQ**, allowing the final receive period to decode. If nobody answers, it selects the strongest eligible CQ heard within **90 seconds** (newest decode wins an SNR tie), calls that station **twice**, then tries up to **four different fresh CQ stations twice each** (five targets total). It ends if all five go unanswered or no fresh eligible target remains. Target calls use the decoded audio offset and opposite UTC period. An advancing reply starts the normal exchange, with four unanswered attempts per contact stage. Stalled exchanges are abandoned without logging; completed contacts save through the normal local/Wavelog/QRZ path.
+**Auto CQ**, first in the menu above Bands, explicitly starts an automatic session. It sends **one own CQ**, allowing the final receive period to decode. If nobody answers, it selects the strongest eligible CQ heard within **90 seconds** (newest decode wins an SNR tie), calls that station **twice**, then tries up to **four different fresh CQ stations twice each** (five targets total). It ends if all five go unanswered or no fresh eligible target remains. Target calls use the decoded audio offset and opposite UTC period. An advancing reply starts the normal exchange, with four unanswered attempts per contact stage. Stalled exchanges are abandoned without logging; completed contacts save through the normal local/Wavelog/QRZ path.
 
 ### Caller queue
 
@@ -96,7 +96,7 @@ Stations addressing you during another contact enter a **FIFO caller queue**. Re
 
 ### POTA Hunt
 
-**POTA Hunt**, directly below Auto CQ, stays in receive-only monitoring until it hears an eligible **CQ POTA** or **CQ SOTA**. It does not transmit its own CQ or a grid-first call: its first reply is the requested **R±dB** report using the decoded SNR, e.g. `W1AW K1ABC R-12`. It follows the activator’s audio offset and opposite UTC period. Each stage gets three unanswered transmission attempts (RRR gets four); an advancing report resets the counter. After completion or exhaustion it rests for 15 seconds, then monitors again; a failed activator has a 60-second cooldown. Already completed stations are skipped for the session. The footer keeps the armed dot without a POTA label, and the menu changes to **Stop POTA Hunt**. Stop Transmit, exit, band/settings changes and RF/clock/connection faults stop monitoring as well as TX. Session journals include the mode, rest and target decisions.
+**POTA Hunt**, in the FT8 menu, stays in receive-only monitoring until it hears an eligible **CQ POTA** or **CQ SOTA**. It does not transmit its own CQ or a grid-first call: its first reply is the requested **R±dB** report using the decoded SNR, e.g. `W1AW K1ABC R-12`. It follows the activator’s audio offset and opposite UTC period. Each stage gets three unanswered transmission attempts (RRR gets four); an advancing report resets the counter. After completion or exhaustion it rests for 15 seconds, then monitors again; a failed activator has a 60-second cooldown. Already completed stations are skipped for the session. The footer keeps the armed dot without a POTA label, and the menu changes to **Stop POTA Hunt**. Stop Transmit, exit, band/settings changes and RF/clock/connection faults stop monitoring as well as TX. Session journals include the mode, rest and target decisions.
 
 POTA Hunt’s direct R-report start still requires a real report from the other station before a QSO can be logged. An early RRR/RR73 without that report is not treated as a completed contact; reports are never invented. Actual report replies advance through the existing RRR/73 logic and local/Wavelog/QRZ logging.
 
@@ -155,7 +155,7 @@ sudo apt install build-essential python3-pil python3-numpy fonts-dejavu-core
 make check
 make test
 make package
-sudo apt install ./build/icomzero_0.16.6-1_arm64.deb
+sudo apt install ./build/icomzero_0.16.7-1_arm64.deb
 ```
 
 Use `make package APPBUILDER=/path/to/AppBuilder` for another checkout location. The package includes a foreground APPLaunch entry and declares its Python, Pillow, NumPy, font, ALSA, and PipeWire dependencies.

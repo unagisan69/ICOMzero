@@ -952,7 +952,7 @@ def ft8_frame(
             message_color = "#8bd6ff" if message.local_tx else ("#ffe1a1" if own else (GREEN if alternate else WHITE))
             # The Maidenhead locator belongs to the decode, not the country label.
             fields = text.rsplit(" ", 1)
-            grid = fields[-1] if len(fields) == 2 and re.fullmatch(r"[A-R]{2}[0-9]{2}(?:[A-X]{2})?", fields[-1]) else ""
+            grid = fields[-1] if len(fields) == 2 and fields[-1] not in ("RR73", "RRR", "R73", "73") and re.fullmatch(r"[A-R]{2}[0-9]{2}(?:[A-X]{2})?", fields[-1]) else ""
             body = fields[0] if grid else text
             font = display.fonts["small"]
             signal_font = display.fonts.setdefault("signal", font.font_variant(size=10))
@@ -1142,9 +1142,9 @@ def ft8_ui(lcd, keyboard):
     held = None
     next_repeat = 0
     menu_items = [
+        "Auto CQ",
         "Bands",
         "Call CQ",
-        "Auto CQ",
         "POTA Hunt",
         "Settings",
         "Stop Transmit",
@@ -1382,11 +1382,11 @@ def ft8_ui(lcd, keyboard):
                     if panel in ("menu", "logging"):
                         items = list(menu_items) if panel == "menu" else log_items
                         if panel == "menu" and history.current() is not None:
-                            items[1] = "Reply / continue"
+                            items[menu_items.index("Call CQ")] = "Reply / continue"
                         if panel == "menu" and getattr(station, "auto_active", False) and getattr(station, "automation_label", "AUTO") == "AUTO":
-                            items[2] = "Stop Auto CQ" + (f" ({station.queued_count} queued)" if getattr(station, "queued_count", 0) else "")
+                            items[menu_items.index("Auto CQ")] = "Stop Auto CQ" + (f" ({station.queued_count} queued)" if getattr(station, "queued_count", 0) else "")
                         if panel == "menu" and getattr(station, "auto_active", False) and getattr(station, "automation_label", "AUTO") == "POTA":
-                            items[3] = "Stop POTA Hunt"
+                            items[menu_items.index("POTA Hunt")] = "Stop POTA Hunt"
                     elif panel == "sync":
                         items = ["Sync with Wavelog", "Sync with QRZ", "Back"]
                     elif panel == "help":

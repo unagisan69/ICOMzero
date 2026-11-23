@@ -307,6 +307,24 @@ class PowerAndDisplay(unittest.TestCase):
         popup = module["qso_popup"](display, image, {"call": "W1AW", "band": "40m"})
         self.assertEqual(popup.getpixel((25, 80)), (18, 63, 48))
 
+    def test_acknowledgments_are_not_styled_as_grid_locators(self):
+        from PIL import ImageDraw, ImageFont
+        from types import SimpleNamespace
+        module = runpy.run_path(str(Path(__file__).resolve().parents[1] / "app/icomzero"))
+        display = SimpleNamespace(fonts={"small": ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 12)})
+        for extra in ("RR73", "RRR", "R73", "73"):
+            history = History()
+            text = "K1ABC W1AW " + extra
+            history.update([Message(100, 1500, text, -10)], "K1ABC")
+            original = ImageDraw.ImageDraw.text
+            with patch.object(ImageDraw.ImageDraw, "text", autospec=True, side_effect=original) as draw:
+                module["ft8_frame"](display, history, "K1ABC", True, "", .5)
+            calls = [c for c in draw.call_args_list if c.args[2] == text]
+            self.assertEqual(len(calls), 1, extra)
+            self.assertEqual(calls[0].kwargs["fill"], "#ffe1a1")
+            self.assertEqual(calls[0].kwargs["font"].size, 12)
+
+
 
 class SelectedMenus(unittest.TestCase):
     def run_menu(self, manual=False, auto=False, pota=False, fault=False, initial=7074000, choose=False, sync=False):
@@ -384,7 +402,7 @@ class SelectedMenus(unittest.TestCase):
             def close(self):
                 pass
 
-        keys = [33, 15] + ([45] * 7 if manual else [45] * (3 if pota else (2 if auto else 1))) + [28]
+        keys = [33, 15] + ([45] * 7 if manual else [45] * (3 if pota else (0 if auto else 2))) + [28]
         if sync:
             keys = [15] + [45] * 4 + [28] + [45] * 8 + [28, 28, 1, 1, 1]
         if initial not in (7074000, 14074000):
@@ -440,7 +458,7 @@ class SelectedMenus(unittest.TestCase):
         )
         self.assertFalse(any(args[0] in ("cq", "reply") for args, _ in actions))
 
-    def test_auto_cq_beneath_call_cq_ignores_highlight(self):
+    def test_auto_cq_first_menu_item_ignores_highlight(self):
         actions, _ = self.run_menu(auto=True)
         self.assertTrue(any(args[0] == "auto_cq" for args, _ in actions))
         self.assertFalse(any(args[0] in ("cq", "reply") for args, _ in actions))
@@ -450,7 +468,7 @@ class SelectedMenus(unittest.TestCase):
         self.assertTrue(any(args[0] == "clear_fault" for args, _ in actions))
         self.assertFalse(any(args[0] in ("cq", "reply", "auto_cq", "pota_hunt") for args, _ in actions))
 
-    def test_pota_hunt_menu_action_is_beneath_auto_cq(self):
+    def test_pota_hunt_menu_action_remains_accessible(self):
         actions, _ = self.run_menu(pota=True)
         self.assertTrue(any(args[0] == "pota_hunt" for args, _ in actions))
 
