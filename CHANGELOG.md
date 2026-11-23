@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.16.7 — 2026-11-23
+
+- Put Auto CQ first in the FT8 menu, above Bands. Keep selected-decode replies and active automation stop labels attached to the correct actions.
+- Keep RR73 and other acknowledgment tokens in the bright message text instead of treating RR73 as a Maidenhead grid locator. Actual grid locators and the smaller signal report remain subdued.
+- Add acknowledgment-styling regressions and update menu-routing checks.
+
 ## 0.16.6 — 2026-11-23
 
 - Add Fn+F/Fn+X Radio spectrum/waterfall zoom at 1×, 2×, 4× and 8×, centered on the tuned frequency and bounded by the received scope span. The original view remains the widest setting.

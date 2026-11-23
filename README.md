@@ -42,7 +42,7 @@ Use **Settings → Check for updates** for the latest stable GitHub release. The
 For manual installation, download the ARM64 package from [GitHub Releases](https://github.com/unagisan69/ICOMzero/releases/latest). Close ICOMzero before installing:
 
 ```sh
-sudo apt install ./icomzero_0.16.6-1_arm64.deb
+sudo apt install ./icomzero_0.16.7-1_arm64.deb
 ```
 
 After an update, fully close and reopen the app to load the new version. [Update details →](docs/USER_GUIDE.md#app-settings-and-updates)
@@ -101,6 +101,8 @@ Measured RF output can differ from the power setting. Network-polled SWR/ALC pro
 [FT8 operation →](docs/USER_GUIDE.md#ft8-contacts) · [Clock and RF protection →](docs/USER_GUIDE.md#clock-and-rf-protection)
 
 ### 🔁 Auto CQ & POTA Hunt
+
+**Auto CQ is the first item in the FT8 menu**, above Bands.
 
 | Mode | Behavior |
 | --- | --- |

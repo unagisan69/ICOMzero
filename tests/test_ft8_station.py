@@ -342,7 +342,8 @@ class UserInterface(unittest.TestCase):
         key(28)  # Answers row 18, never stops reception.
         key(15)
         key(45)
-        key(28)  # Tab -> Call CQ.
+        key(45)
+        key(28)  # Tab -> Call CQ (after Auto CQ and Bands).
         key(1)
         read, write = os.pipe()
         try:
