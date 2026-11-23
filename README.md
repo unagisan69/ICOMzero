@@ -133,7 +133,7 @@ QRZ API access may require a subscription. A local save notification does not me
 - Connection details and tuning step per profile; volume/mute and logging preferences shared across the app.
 - Optional background version checks, manual updates, download progress and **SHA-256 verification**.
 - On-screen shortcut guides, centered notices, and **Enter to request RF-warning clearance**.
-- Credentials, local contacts and private diagnostic/session logs remain on your device. No personal station defaults or API keys are bundled in the public app.
+- Credentials and diagnostic/session logs are stored privately on the device. Contacts upload only to logging services you enable; no personal station defaults or API keys are bundled in the public app.
 
 [Settings and updates →](docs/USER_GUIDE.md#app-settings-and-updates)
 

@@ -149,7 +149,7 @@ On Debian or the Cardputer itself:
 
 ```sh
 git clone https://github.com/CardputerZero/AppBuilder.git ../AppBuilder
-sudo apt install build-essential python3-pil python3-numpy
+sudo apt install build-essential python3-pil python3-numpy fonts-dejavu-core
 make check
 make test
 make package
