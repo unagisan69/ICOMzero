@@ -13,7 +13,7 @@ Direct network listening · Live waterfall · CW decoding · FT8 contacts & logg
 [![Share code ICMZ](https://img.shields.io/badge/share_code-ICMZ-173c49?style=flat-square)](#install)
 [![GPL v3](https://img.shields.io/badge/license-GPL--3.0-blue?style=flat-square)](LICENSE)
 
-[Install](#install) · [Features](#features) · [Controls](#controls) · [Supported radios](#supported-radios) · [User guide](docs/USER_GUIDE.md) · [Changelog](CHANGELOG.md)
+[简体中文设置教程](docs/SETUP.zh-CN.md) · [Install](#install) · [Features](#features) · [Controls](#controls) · [Supported radios](#supported-radios) · [User guide](docs/USER_GUIDE.md) · [Changelog](CHANGELOG.md)
 
 </div>
 

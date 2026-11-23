@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Add a Simplified Chinese setup tutorial covering installation, native-network radio profiles, listening/CW, FT8, logging, remote access and troubleshooting. Link it from the README and English user guide.
+
 ## 0.16.7 — 2026-11-23
 
 - Put Auto CQ first in the FT8 menu, above Bands. Keep selected-decode replies and active automation stop labels attached to the correct actions.
