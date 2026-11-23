@@ -36,7 +36,7 @@ class SettingsInterface(unittest.TestCase):
                 write,
                 b"".join(
                     self.module["EVENT"].pack(0, 0, 1, key, 1)
-                    for key in (46, 46, 28, 1)
+                    for key in (46, 46, 46, 28, 1)
                 ),
             )
             with patch.dict(
@@ -52,10 +52,44 @@ class SettingsInterface(unittest.TestCase):
             os.close(read)
             os.close(write)
         images = [
-            self.module["home_frame"](self.display, i, "Test radio") for i in range(3)
+            self.module["home_frame"](self.display, i, "Test radio") for i in range(4)
         ]
-        self.assertEqual(len({im.tobytes() for im in images}), 3)
+        self.assertEqual(len({im.tobytes() for im in images}), 4)
         self.assertTrue(all(im.size == (320, 170) for im in images))
+
+    def test_main_menu_log_opens_without_connecting_to_radio(self):
+        self.store.preference("check_updates", False)
+        read, write = os.pipe()
+        try:
+            os.write(
+                write,
+                b"".join(
+                    self.module["EVENT"].pack(0, 0, 1, key, 1)
+                    for key in (46, 46, 28, 1)
+                ),
+            )
+            with patch.dict(
+                self.module["home"].__globals__,
+                {"Display": lambda _: self.display, "CONFIG": self.store.path},
+            ), patch("log_ui.LogScreens") as log, patch(
+                "update_session.UpdateSession"
+            ) as update:
+                update.return_value.state = "idle"
+                self.module["home"](-1, read)
+            log.return_value.browser.assert_called_once()
+        finally:
+            os.close(read)
+            os.close(write)
+
+    def test_general_settings_exposes_shared_station_and_logging(self):
+        screen = SettingsScreens(
+            self.display, -1, lambda *_: [], self.module["text_character"], self.store
+        )
+        with patch.object(screen, "select", side_effect=[3, None]), patch.object(
+            screen, "logging"
+        ) as logging:
+            screen.general()
+        logging.assert_called_once()
 
     def test_step_applies_to_tuning_and_is_kept_per_profile(self):
         self.store.update("legacy", step=500)

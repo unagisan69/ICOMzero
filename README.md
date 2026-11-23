@@ -22,7 +22,7 @@ ICOMzero connects a **Cardputer Zero running the stock M5Stack Debian image** di
 | Radio & waterfall | FT8 contacts |
 | :---: | :---: |
 | ![Radio spectrum and waterfall](docs/images/waterfall.png) | ![FT8 messages with signal reports, station labels and TX status](docs/images/ft8.png) |
-| **CW decoding & scrollback** | **Radio, FT8 & Settings** |
+| **CW decoding & scrollback** | **Radio, FT8, Log & Settings** |
 | ![CW scrollback with reading position and scrollbar](docs/images/cw-history.png) | ![Main menu with Radio, FT8 and Settings](docs/images/home.png) |
 
 *Interface examples use demonstration data.*
@@ -99,6 +99,18 @@ CW is receive-only. Crowded signals, fading, digital modes and irregular sending
 Measured RF output can differ from the power setting. Network-polled SWR/ALC protection supplements the radio's own protection; it cannot guarantee instantaneous cutoff during a disconnect. IC-7300MK2 is the physically validated FT8 platform.
 
 [FT8 operation →](docs/USER_GUIDE.md#ft8-contacts) · [Clock and RF protection →](docs/USER_GUIDE.md#clock-and-rf-protection)
+
+### 📖 Onboard logbook
+
+- Open **Log** from the main menu to browse all onboard contacts, newest first, and search by callsign.
+- View each contact’s UTC time, band/mode, frequency, reports and Wavelog/QRZ upload status.
+- **New entry** records a contact without connecting to a radio. Choose FT8, FT4, SSB, CW, AM, FM, RTTY or PSK31; enter its date/time, frequency, reports and optional grid/notes.
+- **Sync logs** downloads full contacts from Wavelog or QRZ, matches existing contacts and queues missing onboard entries for upload to the selected service. Sync is incremental and preserves existing records.
+- Configure shared identity and API accounts in **Settings → Station & logging**, or from the Log menu. Credentials remain on your device.
+
+![Onboard logbook with synthetic sample contacts](docs/images/log.png)
+
+[Logbook and synchronization details →](docs/USER_GUIDE.md#onboard-logbook)
 
 ### 🔁 Auto CQ & POTA Hunt
 
