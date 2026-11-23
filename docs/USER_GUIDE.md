@@ -1,6 +1,6 @@
 # ICOMzero user guide
 
-[← Overview](../README.md) · [Setup](#listen) · [CW](#cw-receive-decoder) · [FT8](#ft8-contacts) · [Auto CQ](#auto-cq) · [POTA Hunt](#pota-hunt) · [Logging](#logging) · [Build](#build-and-test)
+[简体中文设置教程](SETUP.zh-CN.md) · [← Overview](../README.md) · [Setup](#listen) · [CW](#cw-receive-decoder) · [FT8](#ft8-contacts) · [Auto CQ](#auto-cq) · [POTA Hunt](#pota-hunt) · [Logging](#logging) · [Build](#build-and-test)
 
 Listen to a network-connected radio on a **Cardputer Zero** running the stock M5Stack Debian image. ICOMzero connects directly to the radio over LAN or Wi-Fi and plays receive audio through the Cardputer speaker, with a live spectrum/waterfall, tuning, band presets, noise reduction, and antenna-tuner controls where the radio supports them.
 
@@ -75,7 +75,7 @@ The updater is adapted from [MeshCore Zero](https://github.com/unagisan69/meshco
 
 ## FT8 contacts
 
-Choose **FT8** from the startup menu. Reception starts silently on the radio’s current **designated FT8 dial frequency**, preserving 20m at 14.074 MHz when already selected. If the radio is elsewhere, a required band chooser appears before receive setup, automatic tuning or TX; Tab cannot bypass it and Esc exits. Band selection explicitly tunes the designated dial. The active band is shown beside RF power and in the FT8 menu title. The screen displays eleven smaller decode lines, prefixed with estimated signal reports in dB relative to 2500 Hz. Only CQ calls, messages involving your configured callsign, and your own transmitted frames appear. Blue **TX** rows appear after the transmitted 15-second period ends and are local transmit records, not received decodes or proof the other station heard you. Gold rows indicate your callsign; the outlined row is your selection.
+Choose **FT8** from the startup menu. Reception starts silently on the radio’s current **designated FT8 dial frequency**, preserving 20m at 14.074 MHz when already selected. If the radio is elsewhere, a required band chooser appears before receive setup, automatic tuning or TX; Tab cannot bypass it and Esc exits. Band selection explicitly tunes the designated dial. The active band is shown beside RF power and in the FT8 menu title. The screen displays eleven smaller decode lines, with estimated signal reports in dB relative to 2500 Hz following the message/grid in a smaller font. Only CQ calls, messages involving your configured callsign, and your own transmitted frames appear. Blue **TX** rows appear after the transmitted 15-second period ends and are local transmit records, not received decodes or proof the other station heard you. Gold rows indicate your callsign; the outlined row is your selection.
 
 - **F / Fn+F** selects the previous decode; **X / Fn+X** selects the next. Hold to move through history one line at a time. Selection stays on the same decode when new messages arrive. Scrolling down to the newest line clears selection and resumes automatic scrolling.
 - **Enter** replies to or continues the highlighted recent contact. Selection clears after replying and the display returns to the newest decodes.
