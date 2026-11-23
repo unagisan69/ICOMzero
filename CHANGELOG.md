@@ -2,6 +2,8 @@
 
 ## 0.16.4 — 2026-11-22
 
+- Refresh the README feature overview, navigation and screenshots; move detailed operating instructions into a linked user guide and update the App Store listing.
+
 - Preserve CW timing through late but contiguous audio. Icom and Kenwood RX sequence gaps now explicitly resynchronize CW; remove the wall-clock delay reset and enlarge the bounded worker queue to absorb packet bursts.
 - Learn letter and word gap groups separately from character speed, including stretched/Farnsworth spacing. Keep early spacing decisions provisional and cache the timing model to reduce repeated work.
 - Add F/X and Fn+F/Fn+X CW scrollback, including hold repeat. Stay on the reading position while new text arrives; scrolling to the newest line resumes automatic following.
