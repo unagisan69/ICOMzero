@@ -82,6 +82,59 @@ class AutoTests(unittest.TestCase):
         self.send(106)
         self.assertEqual(self.auto.cq_count, 1)
 
+    def test_rrr_retries_full_allowance_for_hunted_station(self):
+        self.send(100)
+        self.receive(101, "K1ABC W1AW FN31")
+        self.send(102)
+        self.receive(103, "K1ABC W1AW R-10")
+        self.auto.hunt_waiting = True
+        for slot in (104, 106, 108, 110):
+            pending = self.send(slot)
+            self.assertEqual(pending[2], "W1AW K1ABC RRR")
+        self.assertEqual(self.saved, [])
+        self.receive(111, "K1ABC W1AW 73")
+        self.assertEqual(len(self.saved), 1)
+
+    def test_repeat_73_preserves_new_contact_without_logging_again(self):
+        self.send(100)
+        self.receive(101, "K1ABC W1AW FN31")
+        self.send(102)
+        self.receive(103, "K1ABC W1AW R-10")
+        self.send(104)
+        self.receive(105, "K1ABC W1AW 73")
+        self.send(106)
+        self.receive(107, "K1ABC W2XYZ FN32")
+        original = (self.seq.partner, self.seq.message, self.seq.hz, self.auto.contact_count)
+        self.receive(107, "K1ABC W1AW RR73")
+        self.assertTrue(self.seq.prepare_ack())
+        pending = self.send(108)
+        self.assertEqual(pending[2], "W1AW K1ABC 73")
+        self.assertEqual(len(self.saved), 1)
+        self.assertEqual((self.seq.partner, self.seq.message, self.seq.hz, self.auto.contact_count), original)
+        self.assertEqual(self.send(110)[2], "W2XYZ K1ABC -12")
+        self.receive(111, "K1ABC W1AW RRR")
+        self.assertTrue(self.seq.prepare_ack())
+        self.assertEqual(self.send(112)[2], "W1AW K1ABC 73")
+        self.assertEqual(len(self.saved), 1)
+
+    def test_repeat_ack_rejects_old_band_and_stale_contact(self):
+        self.seq.completed_contacts['W1AW'] = (14074000, 1500)
+        self.assertFalse(self.seq.queue_ack(Message(100, 1450, 'K1ABC W1AW RRR', -12)))
+        self.seq.completed_contacts['W1AW'] = (7074000, 800)
+        self.assertFalse(self.seq.queue_ack(Message(100, 1450, 'K1ABC W1AW RR73', -12)))
+        self.seq.completed_contacts['W1AW'] = (7074000, 1500)
+        self.assertTrue(self.seq.queue_ack(Message(100, 1450, 'K1ABC W1AW RRR', -12)))
+        self.assertTrue(self.seq.prepare_ack())
+        pending = self.auto.next(100 * 15 + .05)
+        self.assertIsNone(pending)  # opposite period only
+        pending = self.auto.next(101 * 15 + .05)
+        self.assertIsNotNone(pending)
+        self.auto.transmitted(pending, False, 'PTT not confirmed')
+        self.assertFalse(self.seq.enabled)
+        self.assertFalse(self.auto.active)
+        self.assertIsNone(self.seq.ack_resume)
+        self.assertEqual(self.saved, [])
+
     def test_unrelated_and_repeated_stage_do_not_reset_count(self):
         self.send(100)
         self.receive(101, "K1ABC W1AW FN31")

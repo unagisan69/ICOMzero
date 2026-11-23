@@ -290,7 +290,7 @@ class InterfaceRecovery(unittest.TestCase):
                 receiver.thread.join(2)
             self.assertFalse(receiver.busy())
             self.assertEqual(len(attempts), 2)
-            self.assertIn("Reconnecting (1/3)", statuses)
+            self.assertIn("Retrying radio setup (1)", statuses)
             self.assertEqual(receiver.written, 200)
             self.assertEqual(captured, [bytes((1, 2)) * 100])
             self.assertEqual(os.read(read, 200), bytes(200))
@@ -322,9 +322,69 @@ class ConnectionFailureDetails(unittest.TestCase):
             )
             path = Path(root) / "icomzero/connection-diagnostics.jsonl"
             records = [json.loads(line) for line in path.read_text().splitlines()]
-            self.assertEqual(len(records), 4)
+            self.assertEqual(len(records), 16)
             self.assertEqual(path.stat().st_mode & 0o777, 0o600)
             self.assertNotIn("secret", path.read_text())
+
+
+class StartupRecovery(unittest.TestCase):
+    def module(self):
+        return runpy.run_path(str(Path(__file__).resolve().parents[1]/"app/icomzero"))
+
+    def test_one_start_recovers_after_more_than_four_failed_handshakes(self):
+        import tempfile
+        module=self.module();clock=[0.];attempts=[];statuses=[]
+        def delayed(*args,**kwargs):
+            attempts.append(True);args[5]("Finding radio")
+            if len(attempts)<=5:
+                clock[0]+=10
+                raise module["ConnectionLost"]("Radio discovery timed out (no reply)")
+            args[7](7074000);args[11]("mode",1);args[6](bytes(960));args[4].set()
+        def wait(delay):clock[0]+=delay;return False
+        with tempfile.TemporaryDirectory() as root,patch.dict(os.environ,{"XDG_CONFIG_HOME":root}),patch.dict(module["Receiver"].run.__globals__,{"listen":delayed}),patch("time.monotonic",side_effect=lambda:clock[0]):
+            receiver=module["Receiver"](statuses.append);receiver.play_audio=False;receiver.stop.wait=wait
+            receiver.run(("192.0.2.1",50001,"user","secret"))
+        self.assertEqual(len(attempts),6)
+        self.assertIn("Finding radio · retry 5",statuses)
+        self.assertEqual(receiver.packets,1)
+
+    def test_startup_budget_expires_without_a_fresh_manual_attempt(self):
+        import tempfile
+        module=self.module();clock=[0.];attempts=[]
+        def unavailable(*args,**kwargs):
+            attempts.append(True);clock[0]=min(clock[0]+10,kwargs["connect_deadline"])
+            raise module["ConnectionLost"]("Radio discovery timed out (no reply)")
+        def wait(delay):clock[0]+=delay;return False
+        with tempfile.TemporaryDirectory() as root,patch.dict(os.environ,{"XDG_CONFIG_HOME":root}),patch.dict(module["Receiver"].run.__globals__,{"listen":unavailable}),patch("time.monotonic",side_effect=lambda:clock[0]):
+            receiver=module["Receiver"]();receiver.stop.wait=wait
+            receiver.run(("192.0.2.1",50001,"user","secret"))
+        self.assertEqual(clock[0],90)
+        self.assertLess(len(attempts),16)
+        self.assertEqual(receiver.status,"Connection failed: Radio discovery timed out (no reply)")
+
+    def test_unexpected_worker_error_is_visible_without_secret_details(self):
+        import tempfile
+        module=self.module()
+        def broken(*args,**kwargs):raise TypeError("private-login-value")
+        with tempfile.TemporaryDirectory() as root,patch.dict(os.environ,{"XDG_CONFIG_HOME":root}),patch.dict(module["Receiver"].run.__globals__,{"listen":broken}):
+            receiver=module["Receiver"]();receiver.run(("192.0.2.1",50001,"user","secret"))
+            log=(Path(root)/"icomzero/connection-diagnostics.jsonl").read_text()
+        self.assertEqual(receiver.status,"Connection error (TypeError)")
+        self.assertNotIn("private-login-value",log)
+        self.assertNotIn("secret",log)
+
+    def test_reconnection_after_ready_does_not_reuse_the_startup_deadline(self):
+        import tempfile
+        module=self.module();deadlines=[]
+        def restarted(*args,**kwargs):
+            deadlines.append(kwargs["connect_deadline"])
+            if len(deadlines)==1:
+                args[7](7074000);args[11]("mode",1);args[6](bytes(960))
+                raise module["ConnectionLost"]("temporary socket error")
+        with tempfile.TemporaryDirectory() as root,patch.dict(os.environ,{"XDG_CONFIG_HOME":root}),patch.dict(module["Receiver"].run.__globals__,{"listen":restarted}):
+            receiver=module["Receiver"]();receiver.play_audio=False;receiver.stop.wait=lambda _:False
+            receiver.run(("192.0.2.1",50001,"user","secret"))
+        self.assertIsNotNone(deadlines[0]);self.assertIsNone(deadlines[1])
 
 
 if __name__ == "__main__":

@@ -303,7 +303,7 @@ class PowerAndDisplay(unittest.TestCase):
             display, History(), "K1ABC", True, "", 0.5, transmitting=True, armed=True, auto_active=True
         )
         self.assertEqual(image.getpixel((30, 147)), (240, 100, 100))
-        self.assertEqual(image.getpixel((18, 161)), (240, 100, 100))
+        self.assertEqual(image.getpixel((13, 160)), (240, 100, 100))
         popup = module["qso_popup"](display, image, {"call": "W1AW", "band": "40m"})
         self.assertEqual(popup.getpixel((25, 80)), (18, 63, 48))
 

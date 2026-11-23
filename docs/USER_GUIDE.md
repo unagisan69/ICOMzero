@@ -29,7 +29,7 @@ Connect the Cardputer to a network that can reach the radio and enable the radio
 For manual installation, download the `.deb` from [GitHub Releases](https://github.com/unagisan69/ICOMzero/releases), then install it on the Cardputer.
 
 ```sh
-sudo apt install ./icomzero_0.16.4-1_arm64.deb
+sudo apt install ./icomzero_0.16.5-1_arm64.deb
 ```
 
 Open **ICOMzero** from APPLaunch after installation.
@@ -82,7 +82,7 @@ Choose **FT8** from the startup menu. Reception starts silently on the radio’s
 
 ### Station and transmit setup
 
-In **Settings**, enter your callsign and Maidenhead grid (four or six characters), choose your CQ period, TX audio frequency, audio level (10–80%, default 50%), and nominal RF power in watts (default 10 W; TS-890S minimum 5 W). **TX audio Hz defaults to Auto**: replies use the selected station’s decoded audio offset (200–2800 Hz) and lock it for the contact. Auto uses 1500 Hz for your own unanswered CQ and adopts the first responder’s offset. Enter a numeric value to keep a fixed offset; existing saved numeric settings remain manual. Adjust transmit audio for little/no ALC using the radio’s meter. **Call CQ** without a selection starts your own CQ. Replies resume from the latest relevant stage: CQ → grid, grid → report, report → R-report, R-report → RRR, acknowledgment → 73. Known exchanged reports are retained when resuming. An unknown prior report is not invented for logging. Replies derive their opposite even/odd UTC period from the selected station, independently of your own CQ-period setting. On IC-7300MK2, receive setup selects **USB-D / FIL1**, clears split/RIT/XIT and turns NR off after retaining their prior settings. TX preparation selects **DATA MOD = LAN** (not the separate voice DATA OFF input) and requires readback of data mode, filter, LAN source and disabled offsets before keying. These command mappings follow the [Icom CI-V reference](https://icomuk.co.uk/files/icom/PDF/productAdditionalFile/IC-7300MK2_ENG_CI-V_0.pdf). Prior settings are restored on a reachable, confirmed-RX normal exit. A standard contact exchanges grids and signal reports, uses **RRR** (not RR73) for acknowledgment, and finishes with 73. Incoming RR73 is accepted. Ordinary Call CQ/reply retains a five-repetition or three-minute limit. Only one contact is active at a time.
+In **Settings**, enter your callsign and Maidenhead grid (four or six characters), choose your CQ period, TX audio frequency, audio level (10–80%, default 50%), and nominal RF power in watts (default 10 W; TS-890S minimum 5 W). **TX audio Hz defaults to Auto**: replies use the selected station’s decoded audio offset (200–2800 Hz) and lock it for the contact. Auto uses 1500 Hz for your own unanswered CQ and adopts the first responder’s offset. Enter a numeric value to keep a fixed offset; existing saved numeric settings remain manual. Adjust transmit audio for little/no ALC using the radio’s meter. **Call CQ** without a selection starts your own CQ. Replies resume from the latest relevant stage: CQ → grid, grid → report, report → R-report, R-report → RRR, acknowledgment → 73. Known exchanged reports are retained when resuming. An unknown prior report is not invented for logging. Replies derive their opposite even/odd UTC period from the selected station, independently of your own CQ-period setting. On IC-7300MK2, receive setup selects **USB-D / FIL1**, clears split/RIT/XIT and turns NR off after retaining their prior settings. TX preparation selects **DATA MOD = LAN** (not the separate voice DATA OFF input) and requires readback of data mode, filter, LAN source and disabled offsets before keying. These command mappings follow the [Icom CI-V reference](https://icomuk.co.uk/files/icom/PDF/productAdditionalFile/IC-7300MK2_ENG_CI-V_0.pdf). Prior settings are restored on a reachable, confirmed-RX normal exit. A standard contact exchanges grids and signal reports, uses **RRR** (not RR73) for acknowledgment, and finishes with 73. Incoming RR73 is accepted. RRR repeats until 73 is received or the stage retry limit is reached. For ten minutes after completion, a repeated RRR/RR73 addressed to you can schedule one more 73 while armed, then resume the current exchange without another log entry. Ordinary Call CQ/reply retains a five-repetition or three-minute limit. Only one contact is active at a time.
 
 ### Auto CQ
 
@@ -94,7 +94,7 @@ Stations addressing you during another contact enter a **FIFO caller queue**. Re
 
 ### POTA Hunt
 
-**POTA Hunt**, directly below Auto CQ, stays in receive-only monitoring until it hears an eligible **CQ POTA** or **CQ SOTA**. It does not transmit its own CQ or a grid-first call: its first reply is the requested **R±dB** report using the decoded SNR, e.g. `W1AW K1ABC R-12`. It follows the activator’s audio offset and opposite UTC period. Each stage gets three unanswered transmission attempts; an advancing report resets the counter. After completion or exhaustion it rests for 15 seconds, then monitors again; a failed activator has a 60-second cooldown. Already completed stations are skipped for the session. The footer keeps the armed dot without a POTA label, and the menu changes to **Stop POTA Hunt**. Stop Transmit, exit, band/settings changes and RF/clock/connection faults stop monitoring as well as TX. Session journals include the mode, rest and target decisions.
+**POTA Hunt**, directly below Auto CQ, stays in receive-only monitoring until it hears an eligible **CQ POTA** or **CQ SOTA**. It does not transmit its own CQ or a grid-first call: its first reply is the requested **R±dB** report using the decoded SNR, e.g. `W1AW K1ABC R-12`. It follows the activator’s audio offset and opposite UTC period. Each stage gets three unanswered transmission attempts (RRR gets four); an advancing report resets the counter. After completion or exhaustion it rests for 15 seconds, then monitors again; a failed activator has a 60-second cooldown. Already completed stations are skipped for the session. The footer keeps the armed dot without a POTA label, and the menu changes to **Stop POTA Hunt**. Stop Transmit, exit, band/settings changes and RF/clock/connection faults stop monitoring as well as TX. Session journals include the mode, rest and target decisions.
 
 POTA Hunt’s direct R-report start still requires a real report from the other station before a QSO can be logged. An early RRR/RR73 without that report is not treated as a completed contact; reports are never invented. Actual report replies advance through the existing RRR/73 logic and local/Wavelog/QRZ logging.
 
@@ -153,7 +153,7 @@ sudo apt install build-essential python3-pil python3-numpy fonts-dejavu-core
 make check
 make test
 make package
-sudo apt install ./build/icomzero_0.16.4-1_arm64.deb
+sudo apt install ./build/icomzero_0.16.5-1_arm64.deb
 ```
 
 Use `make package APPBUILDER=/path/to/AppBuilder` for another checkout location. The package includes a foreground APPLaunch entry and declares its Python, Pillow, NumPy, font, ALSA, and PipeWire dependencies.

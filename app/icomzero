@@ -7,6 +7,7 @@ import fcntl
 import getpass
 import json
 import os
+import re
 from pathlib import Path
 import select
 import signal
@@ -35,6 +36,8 @@ EVENT = struct.Struct("@llHHi")
 WIDTH, HEIGHT = 320, 170
 BG, CARD, WHITE, MUTED, GREEN = "#101a21", "#1d2d36", "#f0f6f6", "#9bb2bb", "#70edbb"
 TUNE_STEP = 1000
+SETUP_RECOVERY_SECONDS = 90
+SETUP_MAX_FAILURES = 16
 WATERFALL_W, WATERFALL_H = 296, 70
 KEY_CARDPUTER_FN = 389
 KEY_FN, KEY_FN_D, KEY_FN_S = 0x1D0, 0x1E0, 0x1E3
@@ -156,6 +159,14 @@ class Receiver:
         last_start = 0
         startup_deadline = None
         failures = 0
+        ever_ready = False
+        setup_deadline = time.monotonic() + SETUP_RECOVERY_SECONDS
+        last_setup_error = None
+
+        def connection_status(status):
+            if failures and status in ("Finding radio", "Signing in", "Opening RX stream"):
+                status += f" · retry {failures}"
+            self.update(status)
 
         def start_player():
             return subprocess.Popen(
@@ -167,13 +178,14 @@ class Receiver:
 
         try:
             def play(pcm):
-                nonlocal player, last_start, startup_deadline, failures
+                nonlocal player, last_start, startup_deadline, failures, ever_ready
+                if self.frequency is not None and "mode" in self.radio_state:
+                    failures = 0
+                    ever_ready = True
                 if self.audio_observer is not None:
                     self.audio_observer(pcm)
                 if not self.play_audio:
                     self.packets += 1
-                    if self.frequency is not None and "mode" in self.radio_state:
-                        failures = 0
                     self.update("Receiving audio")
                     return
                 now = time.monotonic()
@@ -193,8 +205,6 @@ class Receiver:
                     last_start = now
                 fd = player.stdin.fileno()
                 self.packets += 1
-                if self.frequency is not None and "mode" in self.radio_state:
-                    failures = 0
                 volume = 0 if self.muted else self.volume
                 if volume != 100:
                     samples = np.frombuffer(pcm, dtype="<i2").astype(np.int32)
@@ -213,9 +223,12 @@ class Receiver:
 
             while not self.stop.is_set():
                 try:
+                    if (not ever_ready and last_setup_error
+                            and time.monotonic() >= setup_deadline):
+                        raise RadioError("Connection failed: " + last_setup_error)
                     startup_deadline = None
                     self.session_revision += 1
-                    listen(*settings, self.stop, self.update, play,
+                    listen(*settings, self.stop, connection_status, play,
                            self.frequency_changed, self.scope_changed, self.take_tune,
                            self.take_commands, self.radio_state_changed,
                            model=self.session_config.get("Radio", "Auto (Icom)"),
@@ -223,14 +236,18 @@ class Receiver:
                                        if self.session_config.get("Radio") == "TS-890S" else 60001),
                            admin=self.session_config.get("Login") == "Admin",
                            tx_enabled=self.tx_enabled, take_tx=self.take_tx,
-                           on_audio_gap=self.audio_gap)
+                           on_audio_gap=self.audio_gap,
+                           connect_deadline=None if ever_ready else setup_deadline)
                     break
                 except (ConnectionLost, OSError) as error:
                     from radio import connection_diagnostic
                     connection_diagnostic(error, self.status)
                     self.stop_tx()
                     failures += 1
-                    if failures > 3:
+                    last_setup_error = str(error)
+                    if ((ever_ready and failures > 3) or
+                            (not ever_ready and (time.monotonic() >= setup_deadline
+                             or failures >= SETUP_MAX_FAILURES))):
                         raise RadioError("Connection failed: " + str(error))
                     self.scope = None
                     with self.tune_lock:
@@ -242,8 +259,14 @@ class Receiver:
                             self.commands.append(("force_rx", None))
                             if fault:
                                 self.commands.append(("tx_fault", fault))
-                    self.update(f"Reconnecting ({failures}/3)")
-                    if self.stop.wait(min(2.0, 0.5 * failures)):
+                    if ever_ready:
+                        self.update(f"Reconnecting ({failures}/3)")
+                        delay = min(2.0, .5 * failures)
+                    else:
+                        self.update(f"Retrying radio setup ({failures})")
+                        delay = min(8.0, .5 * 2 ** min(failures-1, 4),
+                                    max(0, setup_deadline-time.monotonic()))
+                    if self.stop.wait(delay):
                         break
             self.update("Disconnected")
         except (RadioError, OSError) as error:
@@ -251,6 +274,14 @@ class Receiver:
             if not str(error).startswith("Connection failed: "):
                 connection_diagnostic(error, self.status)
             self.update(str(error) if isinstance(error, RadioError) else f"Connection error: {error.strerror}")
+        except Exception as error:
+            # A failed worker must not leave the UI frozen at its previous phase.
+            # Unexpected exception messages may contain input data; retain only type.
+            from radio import connection_diagnostic
+            reason = "Connection error (" + type(error).__name__ + ")"
+            connection_diagnostic(reason, self.status)
+            self.stop_tx()
+            self.update(reason)
         finally:
             if player is not None:
                 player.stdin.close()
@@ -894,26 +925,33 @@ def ft8_frame(
                 else ("#674719" if own else ("#174d36" if activation_cq(message) else (CARD if alternate else BG)))
             )
             draw.rectangle((0, y, 319, y + 12), fill=background)
-            text = ("TX " if message.local_tx else f"{message.snr:+03d} ") + message.text
-            draw.text(
-                (9, y - 1),
-                text,
-                font=display.fonts["small"],
-                fill=(
-                    "#8bd6ff"
-                    if message.local_tx
-                    else ("#ffe1a1" if own else (GREEN if alternate else WHITE))
-                ),
-            )
+            text = ("TX " if message.local_tx else "") + message.text
+            muted = "#81998d" if own or activation_cq(message) else "#748a91"
+            message_color = "#8bd6ff" if message.local_tx else ("#ffe1a1" if own else (GREEN if alternate else WHITE))
+            # The Maidenhead locator belongs to the decode, not the country label.
+            fields = text.rsplit(" ", 1)
+            grid = fields[-1] if len(fields) == 2 and re.fullmatch(r"[A-R]{2}[0-9]{2}(?:[A-X]{2})?", fields[-1]) else ""
+            body = fields[0] if grid else text
+            font = display.fonts["small"]
+            signal_font = display.fonts.setdefault("signal", font.font_variant(size=10))
+            draw.text((9, y - 1), body, font=font, fill=message_color)
+            end = 9 + draw.textlength(body, font=font)
+            if grid:
+                draw.text((end, y - 1), " " + grid, font=font, fill=muted)
+                end += draw.textlength(" " + grid, font=font)
+            if not message.local_tx:
+                snr = f" {message.snr:+03d}"
+                draw.text((end, y + 1), snr, font=signal_font, fill=muted)
+                end += draw.textlength(snr, font=signal_font)
             region = short_country(message_country(message))
-            available = min(89, 309 - draw.textlength(text, font=display.fonts["small"]) - 17)
-            if available >= 30:
-                label = region
-                while label and draw.textlength(label, font=display.fonts["small"]) > available:
-                    label = label[:-1]
-                if label != region and len(label) > 1:
-                    label = label[:-1] + "…"
-                draw.text((311, y - 1), label, anchor="ra", font=display.fonts["small"], fill="#b1c8bb")
+            available = 311 - end - 8
+            label = region
+            while label and draw.textlength(label, font=font) > available:
+                label = label[:-1]
+            if label != region and len(label) > 1:
+                label = label[:-1] + "…"
+            if label:
+                draw.text((311, y - 1), label, anchor="ra", font=font, fill=muted)
             if message.key == history.selected:
                 draw.rectangle((0, y, 319, y + 12), outline=GREEN)
                 draw.text((0, y - 1), "›", font=display.fonts["small"], fill=GREEN)
@@ -936,23 +974,14 @@ def ft8_frame(
         (12, 146, 12 + int(progress * 295), 148),
         fill="#f06464" if transmitting else GREEN,
     )
-    draw.text(
-        (231, 152),
-        "Tab - Menu",
-        font=display.fonts["small"],
-        fill="#ff8f8f" if transmitting else MUTED,
-    )
-    if armed:
-        draw.ellipse((14, 157, 22, 165), fill="#f06464")
-    draw.rounded_rectangle(
-        (36, 151, 61, 168), 3, fill="#8a2424" if transmitting else CARD
-    )
-    draw.text(
-        (39, 152),
-        "TX",
-        font=display.fonts["small"],
-        fill=WHITE if transmitting else MUTED,
-    )
+    draw.rounded_rectangle((228, 151, 311, 169), 5, fill=CARD)
+    draw.text((235, 152), "Tab - Menu", font=display.fonts["small"], fill=WHITE)
+    if armed or transmitting:
+        draw.ellipse((10, 157, 16, 163), fill="#f06464")
+        draw.rounded_rectangle((23, 151, 49, 169), 5,
+                               fill="#8a2424" if transmitting else CARD)
+        draw.text((27, 152), "TX", font=display.fonts["small"],
+                  fill=WHITE if transmitting else MUTED)
     now = time.monotonic()
 
     def fresh(name):
@@ -972,27 +1001,15 @@ def ft8_frame(
             if meters.get("watts_display") is not None
             else watts
         )
-    draw.text(
-        (67, 152),
-        f"SWR {swr:.1f}" if swr is not None and (transmitting or fault) else "SWR —",
-        font=display.fonts["small"],
-        fill=WHITE if transmitting else MUTED,
-    )
-    power = (
-        (f"{watts:.0f}W" if watts is not None else "—W")
-        if transmitting
-        else f"{power_set}W set"
-    )
+    if armed or transmitting:
+        draw.text((56, 152), f"SWR {swr:.1f}" if transmitting and swr is not None else "SWR —",
+                  font=display.fonts["small"], fill=WHITE if transmitting else MUTED)
     from ft8 import BANDS
     band_name = next((name for name, hz in BANDS if hz == dial_hz), "")
-    if band_name:
-        power = f"{band_name} " + (f"{watts:.0f}W" if watts is not None else "—W") if transmitting else f"{band_name} {power_set}W"
-    draw.text(
-        (128, 152),
-        power,
-        font=display.fonts["small"],
-        fill=WHITE if transmitting else MUTED,
-    )
+    power = (f"{watts:.0f}W" if watts is not None else "—W") if transmitting else f"{power_set}W"
+    label = " ".join(filter(None, (band_name, power)))
+    draw.text((122 if armed or transmitting else 12, 152), label,
+              font=display.fonts["small"], fill=WHITE if transmitting else MUTED)
     if fault:
         image = notice_popup(display, image, "TX stopped", str(fault), warning=True,
                              hint="Enter - Clear warning")

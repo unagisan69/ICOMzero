@@ -190,10 +190,15 @@ class Sequencer:
         self.last_sent_slot = None
         self.last_sent_stage = None
         self.qso_start = None
+        self.completed_contacts = {}
+        self.ack_queue = {}
+        self.ack_resume = None
 
     def stop(self, reason="Transmit stopped"):
         self.enabled = False
         self.pending = None
+        self.ack_resume = None
+        self.ack_queue.clear()
         self.serial += 1
         self.status = reason
 
@@ -304,7 +309,47 @@ class Sequencer:
             self.stop("Unrecognized contact stage")
             raise ValueError("Select a CQ, grid, report or acknowledgment")
 
+    def queue_ack(self, m):
+        """A completed station may have missed our final 73; never log it again."""
+        parts = m.text.split()
+        now = time.time()
+        if (m.local_tx or len(parts) != 3 or parts[0] != self.settings["callsign"]
+                or parts[2] not in ("RRR", "RR73") or m.key in self.seen
+                or not 0 <= now - m.slot * 15 <= 120):
+            return False
+        completed = self.completed_contacts.get(parts[1])
+        if completed is None or completed[0] != self.dial or now - completed[1] > 600:
+            return False
+        self.seen.add(m.key)
+        self.ack_queue[parts[1]] = m
+        if len(self.ack_queue) > 8:
+            del self.ack_queue[next(iter(self.ack_queue))]
+        return True
+
+    def prepare_ack(self):
+        if not self.enabled or self.pending or self.ack_resume is not None:
+            return False
+        while self.ack_queue:
+            call = next(iter(self.ack_queue))
+            message = self.ack_queue.pop(call)
+            if not 0 <= time.time() - message.slot * 15 <= 120:
+                continue
+            self.ack_resume = self.__dict__.copy()
+            self.partner = call
+            self.message = f"{call} {self.settings['callsign']} 73"
+            self.stage = "ack73"
+            self.parity = 1 - message.slot % 2
+            self.hz = tx_frequency(self.settings, message)
+            self.repeats = 0
+            self.status = "Next: " + self.message
+            return True
+        return False
+
     def receive(self, m):
+        if self.enabled and self.queue_ack(m):
+            return
+        if self.ack_resume is not None:
+            return
         if m.local_tx or not self.enabled or m.key in self.seen:
             return
         self.seen.add(m.key)
@@ -405,6 +450,12 @@ class Sequencer:
             self.qso_start = pending[3] * 15 + 0.5
         self.last_sent_slot = pending[3]
         self.last_sent_stage = pending[1]
+        if pending[1] == "ack73" and self.ack_resume is not None:
+            resume = self.ack_resume
+            self.__dict__.update(resume)
+            self.ack_resume = None
+            self.last_slot = max(self.last_slot or 0, pending[3])
+            return
         if pending[1] == "73" and self.final_seen:
             self.finish()
         else:
@@ -432,4 +483,7 @@ class Sequencer:
             "received": self.received,
         }
         added = self.complete(qso)
+        self.completed_contacts[self.partner] = (self.dial, end)
+        if len(self.completed_contacts) > 64:
+            del self.completed_contacts[next(iter(self.completed_contacts))]
         self.stop(("Already logged " if added is False else "Logged ") + self.partner)

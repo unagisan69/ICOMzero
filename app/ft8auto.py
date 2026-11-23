@@ -369,12 +369,20 @@ class AutoCQ:
     def receive(self, message):
         if not self.active or message.local_tx or message.key in self.seen:
             return
+        if self.sequence.ack_resume is not None:
+            return
         self.seen[message.key] = None
         if len(self.seen) > 4096:
             self.seen.popitem(last=False)
         if message.slot < self.started_slot:
             return
         s = self.sequence
+        if s.queue_ack(message):
+            self.record("repeat_73_queued", text=message.text, rx_slot=message.slot,
+                        rx_audio_hz=message.hz, snr_db=message.snr)
+            return
+        if s.ack_resume is not None:
+            return
         before = (s.stage, s.partner, s.received, s.grid, s.last_rx)
         own = s.settings["callsign"]
         parts = message.text.replace("<", "").replace(">", "").split()
@@ -510,7 +518,7 @@ class AutoCQ:
             return False
         now = time.time() if now is None else now
         s = self.sequence
-        if s.pending:
+        if s.pending or s.ack_resume is not None:
             return False
         if self.mode == "pota" and s.stage == "monitor":
             return self._pota_next(now)
@@ -527,13 +535,15 @@ class AutoCQ:
             self.record("own_cq_exhausted")
             self._hunt_next(now)
             return True
-        limit = 3 if self.mode == "pota" else (2 if self.hunt_waiting else 4)
+        limit = 4 if s.stage == "rrr" else (3 if self.mode == "pota" else (2 if self.hunt_waiting else 4))
         if s.stage != "cq" and self.contact_count >= limit:
             hunting = self.hunt_waiting
             self.record(
                 "contact_abandoned",
                 reason=(
-                    "3_unanswered_attempts"
+                    "4_unanswered_rrr_acknowledgments"
+                    if s.stage == "rrr"
+                    else "3_unanswered_attempts"
                     if self.mode == "pota"
                     else (
                         "2_unanswered_target_calls"
@@ -582,6 +592,10 @@ class AutoCQ:
         if not success:
             self.sequence.transmitted(pending, False)
             self.stop(error or "Auto CQ transmit failed")
+            return
+        if pending[1] == "ack73":
+            self.sequence.transmitted(pending, True)
+            self.record("repeat_73_sent", text=pending[2], tx_slot=pending[3])
             return
         if pending[1] == "cq" and self.sequence.stage == "cq":
             self.cq_count += 1

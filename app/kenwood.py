@@ -436,6 +436,7 @@ def listen(
     tx_enabled=False,
     take_tx=lambda: None,
     on_audio_gap=lambda: None,
+    connect_deadline=None,
 ):
     for value in (username, password):
         if not 1 <= len(value) <= 99 or any(
@@ -508,6 +509,14 @@ def listen(
                         pacer.tick()
                         if pacer.armed or cat.tuning_requested or cat.tuner_state == 2:
                             deadline = now + 6
+                    if (
+                        last_seq is not None
+                        and cat.frequency is not None
+                        and cat.mode is not None
+                    ):
+                        connect_deadline = None
+                    if connect_deadline is not None and now >= connect_deadline:
+                        raise ConnectionLost("Radio setup recovery timed out")
                     if now >= deadline:
                         raise ConnectionLost(
                             "KNS audio timed out; check UDP audio port and radio settings"
