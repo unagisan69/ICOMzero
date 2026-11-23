@@ -402,6 +402,7 @@ class Display:
         font = "/usr/share/fonts/truetype/dejavu/DejaVuSans"
         self.history = Image.new("RGB", (WATERFALL_W, WATERFALL_H), "#080f20")
         self.sweep = None
+        self.zoom = 1
         self.edges = None
         self.levels = None
         self.palette = []
@@ -420,13 +421,29 @@ class Display:
             "cw": ImageFont.truetype(font + "Mono.ttf", 12),
         }
 
-    def update_waterfall(self, scope):
+    def update_waterfall(self, scope, frequency=None):
         if self.sweep is not None and scope is None:
             self.history.paste("#080f20", (0, 0, WATERFALL_W, WATERFALL_H))
             self.sweep = self.edges = self.levels = None
-        if scope is None or scope[0] == self.sweep:
+        if scope is None:
             return
-        self.sweep, start, end, bins = scope
+        zoom = getattr(self, "zoom", 1)
+        stamp = (scope[0], zoom, frequency if zoom > 1 else None)
+        if stamp == self.sweep:
+            return
+        _, start, end, bins = scope
+        if end <= start or not bins:
+            return
+        self.sweep = stamp
+        if zoom > 1:
+            full_start, full_span = start, end - start
+            span = max(1, full_span // zoom)
+            center = frequency if frequency is not None else (start + end) // 2
+            start = max(start, min(end - span, center - span // 2))
+            end = start + span
+            first = max(0, min(len(bins) - 1, (start - full_start) * len(bins) // full_span))
+            last = min(len(bins), max(first + 1, ((end - full_start) * len(bins) + full_span - 1) // full_span))
+            bins = bins[first:last]
         span = end - start
         offset = 0
         if self.edges:
@@ -441,14 +458,14 @@ class Display:
             self.history.paste(previous, (offset, 1))
         self.edges = start, end
         self.levels = [max(bins[x * len(bins) // WATERFALL_W:
-                                (x + 1) * len(bins) // WATERFALL_W])
+                                max(x * len(bins) // WATERFALL_W + 1, (x + 1) * len(bins) // WATERFALL_W)])
                        for x in range(WATERFALL_W)]
         row = Image.frombytes("P", (WATERFALL_W, 1), bytes(self.levels))
         row.putpalette(self.palette)
         self.history.paste(row.convert("RGB"), (0, 0))
 
     def render(self, values, selected, editing, status, volume, busy, frequency,
-               scope, band, volume_visible, radio_state=None, help_open=False, radio_menu=None, step=1000, cw=None, cw_enabled=False, cw_tone=None):
+               scope, band, volume_visible, radio_state=None, help_open=False, radio_menu=None, step=1000, cw=None, cw_enabled=False, cw_tone=None, zoom=1):
         image = Image.new("RGB", (WIDTH, HEIGHT), BG)
         draw = ImageDraw.Draw(image)
 
@@ -458,7 +475,8 @@ class Display:
                 text = text[:-1]
             draw.text((x, y), text, font=font, fill=color)
 
-        self.update_waterfall(scope)
+        self.zoom = zoom
+        self.update_waterfall(scope, frequency)
         profile = (radio_state or {}).get("profile", DEFAULT_PROFILE)
         bands = presets(profile, cw=cw_enabled or (radio_state or {}).get("mode") in (3,7))
         if selected is not None:
@@ -500,7 +518,7 @@ class Display:
                     mode += " NR"
                 if (radio_state or {}).get("tuner") == 2:
                     mode = "TUNING"
-                label(160, 12, mode, "small", MUTED)
+                label(160, 12, mode + (f" · {zoom}×" if zoom > 1 else ""), "small", MUTED)
             badge = "RX" if status == "Receiving audio" else ("LINK" if busy else "OFF")
             label(279, 12, badge, "small", GREEN if badge == "RX" else MUTED)
 
@@ -563,7 +581,7 @@ class Display:
                 ("Fn + S / D", "Volume down / up"),
                 ("Fn + A", "Mute / unmute"),
                 ("W", "CW decoder on / off"),
-                ("F / X", "Scroll CW history"),
+                ("F / X", "History / Fn: zoom in/out"),
                 ("S / Esc", "Radio settings / menu"),
             )
             for index, (key, action) in enumerate(shortcuts):
@@ -614,6 +632,7 @@ def ui(lcd, keyboard):
     cw_history = Scrollback()
     cw_enabled = False
     cw_tone = None
+    zoom = 1
     last_mode = None
     shift = set()
     fn = False
@@ -666,7 +685,7 @@ def ui(lcd, keyboard):
             scope = rx.scope if busy and rx.scope and now - rx.scope[0] < 2 else None
             state = (tuple(values), None, False, rx.status, 0 if rx.muted else rx.volume, busy,
                      rx.displayed_frequency() if busy else None, scope, band, now < volume_until,
-                     rx.radio_state, help_open, radio_menu, rx.step, cw_state, cw_enabled, cw_tone)
+                     rx.radio_state, help_open, radio_menu, rx.step, cw_state, cw_enabled, cw_tone, zoom)
             if now >= next_paint and (state != redraw or now < initial):
                 display.render(*state)
                 redraw = state
@@ -748,7 +767,10 @@ def ui(lcd, keyboard):
                     elif key == 28:
                         rx.change_band(bands[band][1])
                         band = None
-                elif cw_enabled and key in (33,45,103,108):
+                elif key in (103,108) or (fn and key in (33,45)):
+                    zoom = min(8, zoom * 2) if key in (33,103) else max(1, zoom // 2)
+                    held_scroll = None
+                elif cw_enabled and key in (33,45):
                     cw_history.scroll(-1 if key in (33,103) else 1)
                     held_scroll = key
                     next_scroll = time.monotonic() + .35

@@ -29,7 +29,7 @@ Connect the Cardputer to a network that can reach the radio and enable the radio
 For manual installation, download the `.deb` from [GitHub Releases](https://github.com/unagisan69/ICOMzero/releases), then install it on the Cardputer.
 
 ```sh
-sudo apt install ./icomzero_0.16.5-1_arm64.deb
+sudo apt install ./icomzero_0.16.6-1_arm64.deb
 ```
 
 Open **ICOMzero** from APPLaunch after installation.
@@ -56,7 +56,9 @@ Press **Tab** on the receiver screen to open the keyboard shortcut guide. **Tab*
 
 While listening in **Radio**, press **W** to turn CW decoding on or off. **This leaves the radio’s receive mode, frequency and filter unchanged.** Keep LSB or USB selected if that is where the CW sounds clear. **S → CW decoder** offers the same toggle. Native **CW/CW-R** remain available under **S → Mode**, but changing demodulation modes can move the receive passband and require retuning to the station. Selecting a native CW mode also enables decoding.
 
-The panel beneath the waterfall shows the newest decoded text, detected tone and estimated character speed. A green dot follows the received tone. Audio is decoded before speaker volume/mute processing, so Fn+A can silence the speaker without stopping decoding. **S → CW tone** selects Auto or a specific audio pitch when several signals are audible; tone selection affects only the decoder. A 100 Hz tuning step helps center a station. Decoding does not key the radio, send Morse, reply or log CW contacts. Changing frequency/mode or reconnecting resets partial characters; confirmed missing audio triggers resynchronization. These events start a new line while retaining the earlier text in the Radio session’s scrollback. **F/X** (or **Fn+F/Fn+X**) scrolls one line up/down; hold to repeat. Scrolling to the bottom resumes automatic following of new decodes. Up to 16,384 characters are retained in memory for the current Radio session.
+In Radio view, **Fn+F** zooms the spectrum and waterfall in through **1×, 2×, 4× and 8×**; **Fn+X** zooms out. The original full scope span is the widest view. Zoom follows the tuned frequency, clamped to the scope data available from the radio. This magnifies the existing data without changing radio tuning or adding signal resolution. Changing zoom starts a fresh waterfall segment so differently scaled history is not mixed. Plain F/X still scrolls CW history.
+
+The panel beneath the waterfall shows the newest decoded text, detected tone and estimated character speed. A green dot follows the received tone. Audio is decoded before speaker volume/mute processing, so Fn+A can silence the speaker without stopping decoding. **S → CW tone** selects Auto or a specific audio pitch when several signals are audible; tone selection affects only the decoder. A 100 Hz tuning step helps center a station. Decoding does not key the radio, send Morse, reply or log CW contacts. Changing frequency/mode or reconnecting resets partial characters; confirmed missing audio triggers resynchronization. These events start a new line while retaining the earlier text in the Radio session’s scrollback. **F/X** scrolls one line up/down; hold to repeat. Scrolling to the bottom resumes automatic following of new decodes. Up to 16,384 characters are retained in memory for the current Radio session.
 
 The automatic detector searches roughly **200–2800 Hz**, confirms a stable keyed tone and follows its pitch without requiring it to dominate the whole passband. A bounded spectral history helps reject steady nearby carriers; local noise measurements preserve marks during fading. Character and word spacing adapt separately to the received timing, including stretched letter gaps. Initial provisional text may revise as more Morse arrives; the parser repairs invalid Morse groups using measured gaps and preserves already-valid letter boundaries, without a language dictionary or callsign autocorrection. It uses [standard Morse timing](https://www.arrl.org/files/file/Technology/x9004008.pdf) and was tested with generated noisy audio at **8–35 WPM**, including weighted hand keying, compressed spacing, fading, a nearby carrier and tone/speed changes. Tune a clear CW signal and select its tone if needed. Mixed stations, RTTY/digital signals, QRM, deep fading and irregular hand spacing can cause errors; unknown symbols appear as question marks. Speed estimates describe character timing, not overall QSO rate.
 
@@ -153,7 +155,7 @@ sudo apt install build-essential python3-pil python3-numpy fonts-dejavu-core
 make check
 make test
 make package
-sudo apt install ./build/icomzero_0.16.5-1_arm64.deb
+sudo apt install ./build/icomzero_0.16.6-1_arm64.deb
 ```
 
 Use `make package APPBUILDER=/path/to/AppBuilder` for another checkout location. The package includes a foreground APPLaunch entry and declares its Python, Pillow, NumPy, font, ALSA, and PipeWire dependencies.
@@ -173,3 +175,7 @@ The radio capability snapshot is pinned in `app/radios.json`. Regenerate it with
 ## Credits
 
 The Icom LAN and Kenwood KNS/RTP implementations were developed using [wfview](https://github.com/wf-group/wfview/tree/8e4172c18bddc2efc6ba93fdbd33736ab0939bdd) as a reference, including its credential substitution table. Packaging uses [CardputerZero AppBuilder](https://github.com/CardputerZero/AppBuilder). ICOMzero is distributed under the GNU General Public License version 3. See [LICENSE](../LICENSE) and the [changelog](../CHANGELOG.md).
+
+### IC-7300MK2 access from outside your LAN
+
+With the default radio port settings, forward **UDP 50001** (control), **UDP 50002** (serial/CAT) and **UDP 50003** (audio) to the radio’s reserved LAN address, preserving the same external/internal port numbers. Spectrum data travels over CAT in ICOMzero; a separate scope-port forward is not used. Set the radio’s default gateway correctly, enable Network Control and use your public IP or hostname in the Remote radio profile. A routed VPN is an alternative to forwarding the radio ports. See the [Icom basic manual, Network settings](https://www.icomeurope.com/wp-content/uploads/2026/02/IC-7300MK2_ENG_IM_Basic_1.pdf).
