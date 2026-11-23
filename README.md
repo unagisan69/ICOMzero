@@ -149,7 +149,8 @@ QRZ API access may require a subscription. A local save notification does not me
 | **S** | Radio settings: band, step, mode, CW decoder and tone |
 | **M** | Toggle USB / LSB |
 | **W** | Toggle CW decoding |
-| **F / X** or **Fn+F / Fn+X** | Scroll CW history up / down; bottom resumes live following |
+| **F / X** | Scroll CW history up / down; bottom resumes live following |
+| **Fn+F / Fn+X** | Zoom spectrum/waterfall in / out (1×–8×) |
 | **Fn+S / Fn+D** | Volume down / up |
 | **Fn+A** | Mute / unmute |
 | **N** | Toggle noise reduction, where supported |

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.16.6 — 2026-11-23
+
+- Add Fn+F/Fn+X Radio spectrum/waterfall zoom at 1×, 2×, 4× and 8×, centered on the tuned frequency and bounded by the received scope span. The original view remains the widest setting.
+- Rescale both displays together, reset differently scaled waterfall history and show the active zoom beside the mode. No radio tuning or scope commands are sent. Plain F/X retains CW scrollback; FT8 controls are unchanged.
+- Update keyboard help and operating instructions; cover zoom limits, driver-translated keys, edge clamping, retuning and narrow-bin rendering.
+
 ## 0.16.5 — 2026-11-23
 
 - Simplify the FT8 footer with compact rounded controls; show TX and SWR only while armed or transmitting. Preserve its height and red transmit progress.

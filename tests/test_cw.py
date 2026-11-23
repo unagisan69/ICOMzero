@@ -448,7 +448,7 @@ class RadioCW(unittest.TestCase):
         self.assertIn(True, [call.args[0] for call in decoder.configure.call_args_list])
         self.assertFalse(decoder.configure.call_args.args[0])
 
-    def test_f_x_and_fn_arrows_scroll_without_tuning(self):
+    def test_f_x_scroll_and_fn_arrows_zoom_without_tuning(self):
         import os, runpy
         from pathlib import Path
         from unittest.mock import Mock
@@ -511,7 +511,7 @@ class RadioCW(unittest.TestCase):
         finally:
             os.close(read)
             os.close(write)
-        self.assertEqual(moves, [-1, 1, -1, 1])
+        self.assertEqual(moves, [-1, 1])
         rx.tune.assert_not_called()
         rx.command.assert_not_called()
 
