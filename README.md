@@ -42,7 +42,7 @@ Use **Settings → Check for updates** for the latest stable GitHub release. The
 For manual installation, download the ARM64 package from [GitHub Releases](https://github.com/unagisan69/ICOMzero/releases/latest). Close ICOMzero before installing:
 
 ```sh
-sudo apt install ./icomzero_0.16.5-1_arm64.deb
+sudo apt install ./icomzero_0.16.6-1_arm64.deb
 ```
 
 After an update, fully close and reopen the app to load the new version. [Update details →](docs/USER_GUIDE.md#app-settings-and-updates)
@@ -62,7 +62,7 @@ After an update, fully close and reopen the app to load the new version. [Update
 ### 📻 Radio listening & tuning
 
 - **Direct network audio** through the Cardputer speaker, with saved volume and mute.
-- **Live spectrum and waterfall**, using the radio's scope span and range.
+- **Live spectrum and waterfall**, with **1× / 2× / 4× / 8× zoom** centered on the tuned frequency. Use **Fn+F / Fn+X** to zoom in/out; 1× keeps the original full view.
 - **Hold-to-tune controls**, band presets and per-radio **1000 / 500 / 100 Hz** steps.
 - **USB, LSB, CW and CW-R** mode selection; band presets preserve native CW modes.
 - **Noise reduction** toggle and **antenna-tuner control** on models that support them.

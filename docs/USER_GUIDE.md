@@ -29,7 +29,7 @@ Connect the Cardputer to a network that can reach the radio and enable the radio
 For manual installation, download the `.deb` from [GitHub Releases](https://github.com/unagisan69/ICOMzero/releases), then install it on the Cardputer.
 
 ```sh
-sudo apt install ./icomzero_0.16.5-1_arm64.deb
+sudo apt install ./icomzero_0.16.6-1_arm64.deb
 ```
 
 Open **ICOMzero** from APPLaunch after installation.
@@ -155,7 +155,7 @@ sudo apt install build-essential python3-pil python3-numpy fonts-dejavu-core
 make check
 make test
 make package
-sudo apt install ./build/icomzero_0.16.5-1_arm64.deb
+sudo apt install ./build/icomzero_0.16.6-1_arm64.deb
 ```
 
 Use `make package APPBUILDER=/path/to/AppBuilder` for another checkout location. The package includes a foreground APPLaunch entry and declares its Python, Pillow, NumPy, font, ALSA, and PipeWire dependencies.
@@ -175,3 +175,7 @@ The radio capability snapshot is pinned in `app/radios.json`. Regenerate it with
 ## Credits
 
 The Icom LAN and Kenwood KNS/RTP implementations were developed using [wfview](https://github.com/wf-group/wfview/tree/8e4172c18bddc2efc6ba93fdbd33736ab0939bdd) as a reference, including its credential substitution table. Packaging uses [CardputerZero AppBuilder](https://github.com/CardputerZero/AppBuilder). ICOMzero is distributed under the GNU General Public License version 3. See [LICENSE](../LICENSE) and the [changelog](../CHANGELOG.md).
+
+### IC-7300MK2 access from outside your LAN
+
+With the default radio port settings, forward **UDP 50001** (control), **UDP 50002** (serial/CAT) and **UDP 50003** (audio) to the radio’s reserved LAN address, preserving the same external/internal port numbers. Spectrum data travels over CAT in ICOMzero; a separate scope-port forward is not used. Set the radio’s default gateway correctly, enable Network Control and use your public IP or hostname in the Remote radio profile. A routed VPN is an alternative to forwarding the radio ports. See the [Icom basic manual, Network settings](https://www.icomeurope.com/wp-content/uploads/2026/02/IC-7300MK2_ENG_IM_Basic_1.pdf).
