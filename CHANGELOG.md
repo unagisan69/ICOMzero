@@ -1,6 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.16.5 — 2026-11-23
+
+- Simplify the FT8 footer with compact rounded controls; show TX and SWR only while armed or transmitting. Preserve its height and red transmit progress.
+- Put decode signal strength after the region label, with both details dimmed so the message remains prominent.
+- Give the RRR acknowledgment stage four unanswered attempts, including hunted stations, before moving on. Continue immediately when the other station sends 73.
+- Re-send a final 73 when a recently completed station repeats RRR/RR73, then resume the interrupted exchange without resetting its attempt count or creating another QSO log. Bound acknowledgment history and queued replies; normal TX safety checks still apply.
+
 
 - Recover initial radio setup across transient discovery/login failures within a 90-second startup budget, with capped backoff, cancellation and visible retry progress. Disarm the startup deadline once audio and control are ready; retain the existing established-session reconnect and TX-stop behavior.
 - Retry a lost Icom capability request without a new login. Distinguish discovery, control handshake, login and capability response timeouts.

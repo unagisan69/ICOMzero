@@ -924,7 +924,7 @@ def ft8_frame(
                 else ("#674719" if own else ("#174d36" if activation_cq(message) else (CARD if alternate else BG)))
             )
             draw.rectangle((0, y, 319, y + 12), fill=background)
-            text = ("TX " if message.local_tx else f"{message.snr:+03d} ") + message.text
+            text = ("TX " if message.local_tx else "") + message.text
             draw.text(
                 (9, y - 1),
                 text,
@@ -936,14 +936,16 @@ def ft8_frame(
                 ),
             )
             region = short_country(message_country(message))
-            available = min(89, 309 - draw.textlength(text, font=display.fonts["small"]) - 17)
-            if available >= 30:
-                label = region
-                while label and draw.textlength(label, font=display.fonts["small"]) > available:
-                    label = label[:-1]
-                if label != region and len(label) > 1:
-                    label = label[:-1] + "…"
-                draw.text((311, y - 1), label, anchor="ra", font=display.fonts["small"], fill="#b1c8bb")
+            snr = "" if message.local_tx else f" {message.snr:+03d}"
+            available = 309 - draw.textlength(text, font=display.fonts["small"]) - 17
+            label = region
+            while label and draw.textlength(label + snr, font=display.fonts["small"]) > available:
+                label = label[:-1]
+            if label != region and len(label) > 1:
+                label = label[:-1] + "…"
+            if draw.textlength(label + snr, font=display.fonts["small"]) <= available:
+                draw.text((311, y - 1), label + snr, anchor="ra",
+                          font=display.fonts["small"], fill="#81998d" if own or activation_cq(message) else "#748a91")
             if message.key == history.selected:
                 draw.rectangle((0, y, 319, y + 12), outline=GREEN)
                 draw.text((0, y - 1), "›", font=display.fonts["small"], fill=GREEN)
@@ -966,23 +968,14 @@ def ft8_frame(
         (12, 146, 12 + int(progress * 295), 148),
         fill="#f06464" if transmitting else GREEN,
     )
-    draw.text(
-        (231, 152),
-        "Tab - Menu",
-        font=display.fonts["small"],
-        fill="#ff8f8f" if transmitting else MUTED,
-    )
-    if armed:
-        draw.ellipse((14, 157, 22, 165), fill="#f06464")
-    draw.rounded_rectangle(
-        (36, 151, 61, 168), 3, fill="#8a2424" if transmitting else CARD
-    )
-    draw.text(
-        (39, 152),
-        "TX",
-        font=display.fonts["small"],
-        fill=WHITE if transmitting else MUTED,
-    )
+    draw.rounded_rectangle((228, 151, 311, 169), 5, fill=CARD)
+    draw.text((235, 152), "Tab - Menu", font=display.fonts["small"], fill=WHITE)
+    if armed or transmitting:
+        draw.ellipse((10, 157, 16, 163), fill="#f06464")
+        draw.rounded_rectangle((23, 151, 49, 169), 5,
+                               fill="#8a2424" if transmitting else CARD)
+        draw.text((27, 152), "TX", font=display.fonts["small"],
+                  fill=WHITE if transmitting else MUTED)
     now = time.monotonic()
 
     def fresh(name):
@@ -1002,27 +995,15 @@ def ft8_frame(
             if meters.get("watts_display") is not None
             else watts
         )
-    draw.text(
-        (67, 152),
-        f"SWR {swr:.1f}" if swr is not None and (transmitting or fault) else "SWR —",
-        font=display.fonts["small"],
-        fill=WHITE if transmitting else MUTED,
-    )
-    power = (
-        (f"{watts:.0f}W" if watts is not None else "—W")
-        if transmitting
-        else f"{power_set}W set"
-    )
+    if armed or transmitting:
+        draw.text((56, 152), f"SWR {swr:.1f}" if transmitting and swr is not None else "SWR —",
+                  font=display.fonts["small"], fill=WHITE if transmitting else MUTED)
     from ft8 import BANDS
     band_name = next((name for name, hz in BANDS if hz == dial_hz), "")
-    if band_name:
-        power = f"{band_name} " + (f"{watts:.0f}W" if watts is not None else "—W") if transmitting else f"{band_name} {power_set}W"
-    draw.text(
-        (128, 152),
-        power,
-        font=display.fonts["small"],
-        fill=WHITE if transmitting else MUTED,
-    )
+    power = (f"{watts:.0f}W" if watts is not None else "—W") if transmitting else f"{power_set}W"
+    label = " ".join(filter(None, (band_name, power)))
+    draw.text((122 if armed or transmitting else 12, 152), label,
+              font=display.fonts["small"], fill=WHITE if transmitting else MUTED)
     if fault:
         image = notice_popup(display, image, "TX stopped", str(fault), warning=True,
                              hint="Enter - Clear warning")

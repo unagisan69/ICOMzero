@@ -500,6 +500,8 @@ class Station:
                         self.sequence.status = job.error or "Transmit stopped"
                         record_fault(self.receiver, self.sequence.status, job)
                     job = pending = None
+                if job is None:
+                    self.sequence.prepare_ack()
                 if self.auto.active and job is None:
                     try:
                         self.auto.prepare(decoded_slot=self.decoder.last_decoded_slot)
