@@ -21,7 +21,7 @@ class SyncError(ValueError):
     pass
 
 
-def adif_records(text):
+def adif_records(text, fields=KEEP_FIELDS):
     """Consume declared field lengths, including tags embedded inside values."""
     record = {}
     position = 0
@@ -44,7 +44,7 @@ def adif_records(text):
             end = position + int(match[2])
             if end > len(text):
                 raise SyncError("Truncated ADIF field")
-            if name in KEEP_FIELDS:
+            if fields is None or name in fields:
                 record[name] = text[position:end]
             position = end
 
@@ -145,7 +145,13 @@ class WorkedHistory:
     def add_local(self, qso):
         self.apply(
             "local:" + qso["own_call"].upper(),
-            [{"CALL": qso["call"], "BAND": qso["band"], "MODE": "FT8"}],
+            [
+                {
+                    "CALL": qso["call"],
+                    "BAND": qso["band"],
+                    "MODE": qso.get("mode", "FT8"),
+                }
+            ],
         )
 
     def seed_local(self):
@@ -164,7 +170,11 @@ class WorkedHistory:
             for rowid, payload in rows:
                 qso = json.loads(payload)
                 grouped["local:" + qso["own_call"].upper()].append(
-                    {"CALL": qso["call"], "BAND": qso["band"], "MODE": "FT8"}
+                    {
+                        "CALL": qso["call"],
+                        "BAND": qso["band"],
+                        "MODE": qso.get("mode", "FT8"),
+                    }
                 )
                 last = rowid
             for account, records in grouped.items():
@@ -272,7 +282,13 @@ class WorkedHistory:
                     },
                     True,
                 )
-                if result.get("RESULT") != "OK":
+                empty = (
+                    result.get("RESULT") == "FAIL"
+                    and str(result.get("COUNT")) == "0"
+                    and not result.get("REASON")
+                    and not result.get("ADIF")
+                )
+                if result.get("RESULT") != "OK" and not empty:
                     raise SyncError("QRZ history access failed; check API subscription")
                 records = list(adif_records(result.get("ADIF", "")))
                 if records:

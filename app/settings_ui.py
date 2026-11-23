@@ -1,6 +1,7 @@
 """Main-menu preferences, named radio editing and explicit update screens."""
 
 import time
+import threading
 from PIL import Image, ImageDraw
 from models import RADIO_CHOICES
 from profiles import ProfileStore, FIELDS, DEFAULTS
@@ -246,6 +247,133 @@ class SettingsScreens:
             except ValueError as error:
                 self.message("Check settings", str(error))
 
+    def logging(self):
+        from ft8log import load_settings, save_settings
+        from contacts import callsign, grid
+
+        choice = 0
+        while True:
+            settings = load_settings()
+            selected = self.select(
+                "Station & logging",
+                [
+                    "Call sign: " + (settings["callsign"] or "Set your call"),
+                    "Grid: " + (settings["grid"] or "Not set"),
+                    "Wavelog",
+                    "QRZ",
+                    "Back",
+                ],
+                "Shared by FT8 and the onboard log",
+                choice,
+            )
+            if selected is None or selected == 4:
+                return
+            choice = selected
+            if selected in (2, 3):
+                self.logging_provider(("wavelog", "qrz")[selected - 2])
+                continue
+            key = ("callsign", "grid")[selected]
+            value = self.input(
+                "Your callsign" if selected == 0 else "Maidenhead grid",
+                settings[key],
+                limit=24,
+            )
+            if value is not None:
+                try:
+                    settings[key] = callsign(value) if selected == 0 else grid(value)
+                    save_settings(settings)
+                except ValueError as error:
+                    self.message("Check station", str(error))
+
+    def logging_provider(self, service):
+        from ft8log import load_settings, save_settings, test_service
+
+        fields = (
+            [
+                ("API URL", "wavelog_url"),
+                ("API key", "wavelog_key"),
+                ("Station ID", "wavelog_station"),
+            ]
+            if service == "wavelog"
+            else [("API key", "qrz_key")]
+        )
+        choice = 0
+        while True:
+            settings = load_settings()
+            items = [
+                label
+                + ": "
+                + (
+                    ("•" * min(12, len(settings[key])))
+                    if key.endswith("_key")
+                    else settings[key]
+                )
+                for label, key in fields
+            ]
+            items += [
+                "Enabled: " + ("On" if settings[service + "_enabled"] else "Off"),
+                "Test connection",
+                "Back",
+            ]
+            selected = self.select(
+                service.title(),
+                items,
+                "Private credentials stay on this device",
+                choice,
+            )
+            if selected is None or selected == len(fields) + 2:
+                return
+            choice = selected
+            if selected < len(fields):
+                label, key = fields[selected]
+                value = self.input(
+                    label, settings[key], secret=key.endswith("_key"), limit=512
+                )
+                if value is not None:
+                    settings[key] = value.strip()
+                    save_settings(settings)
+            elif selected == len(fields):
+                settings[service + "_enabled"] = not settings[service + "_enabled"]
+                save_settings(settings)
+            else:
+                result = self.check_logging_connection(service, settings)
+                if result and service == "wavelog" and not settings["wavelog_station"]:
+                    settings["wavelog_station"] = result.removeprefix("Station ")
+                    save_settings(settings)
+
+    def check_logging_connection(self, service, settings):
+        from ft8log import test_service
+
+        done = threading.Event()
+        result = {}
+
+        def check():
+            try:
+                result["value"] = test_service(service, dict(settings))
+            except Exception as error:
+                result["error"] = type(error).__name__
+            finally:
+                done.set()
+
+        threading.Thread(target=check, daemon=True).start()
+        image, _ = self.frame(
+            "Checking connection",
+            "Read-only check · Esc cancels",
+            "No test QSO will be created",
+        )
+        self.display.present(image)
+        while not done.is_set():
+            for key, value in self.events(self.keyboard, 0.1):
+                if value == 1 and key in (1, 15):
+                    return None
+        if "error" in result:
+            self.message(
+                "Connection failed", result["error"] + " · check settings/subscription"
+            )
+            return None
+        self.message("Connected", result["value"])
+        return result["value"]
+
     def general(self, update=None):
         choice = 0
         while True:
@@ -255,11 +383,12 @@ class SettingsScreens:
                 "Check for updates",
                 "Launch update check: "
                 + ("On" if data.get("check_updates", True) else "Off"),
+                "Station & logging",
                 "About ICOMzero",
                 "Back",
             ]
             selected = self.select("Settings", items, "ICOMzero " + VERSION, choice)
-            if selected is None or selected == 4:
+            if selected is None or selected == 5:
                 return
             choice = selected
             if selected == 0:
@@ -273,6 +402,8 @@ class SettingsScreens:
                     "check_updates", not data.get("check_updates", True)
                 )
             elif selected == 3:
+                self.logging()
+            elif selected == 4:
                 self.message(
                     "ICOMzero " + VERSION, "Direct radio · FT8 · GitHub updates"
                 )

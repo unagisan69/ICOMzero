@@ -1,6 +1,13 @@
 # Changelog
 
-## Unreleased
+## 0.17.0 — 2026-11-23
+
+- Add a fourth icon card, Log, to the main menu with a compact onboard contact browser, callsign search and details including upload state.
+- Add manual contact entry with UTC date/time, frequency, mode, grid, reports and notes; support FT8/FT4, SSB, CW, AM, FM, RTTY and PSK31 without a radio connection.
+- Add full-contact Wavelog/QRZ sync with account-scoped paging, duplicate matching, preserved existing records, visible skipped counts and durable queues for missing local uploads. Keep the older worked-index sync separate.
+- Share station identity and provider credentials through main Settings → Station & logging. Mask keys, make connection checks cancellable and bind pending uploads to their configured account.
+- Preserve non-FT8 modes/reports in ADIF and keep them out of the FT8 hide-worked index. Browse contacts by contact time rather than import order.
+
 
 - Add a Simplified Chinese setup tutorial covering installation, native-network radio profiles, listening/CW, FT8, logging, remote access and troubleshooting. Link it from the README and English user guide.
 

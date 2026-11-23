@@ -93,7 +93,7 @@ def request(url, data, form=False):
                 "application/x-www-form-urlencoded" if form else "application/json"
             ),
             "Accept": "application/json",
-            "User-Agent": "ICOMzero/0.16.7",
+            "User-Agent": "ICOMzero/0.17.0",
         },
     )
     with urllib.request.urlopen(req, timeout=10) as response:
@@ -138,6 +138,10 @@ def test_service(service, settings):
     return "QRZ connected"
 
 
+def report_text(value):
+    return f"{value:+03d}" if isinstance(value, int) else str(value or "")
+
+
 def adif(qso):
     start = time.gmtime(qso["start"])
     end = time.gmtime(qso["end"])
@@ -145,18 +149,22 @@ def adif(qso):
         "CALL": qso["call"],
         "STATION_CALLSIGN": qso["own_call"],
         "MY_GRIDSQUARE": qso["own_grid"],
-        "MODE": "FT8",
-        "FREQ": f"{qso['dial']/1e6:.6f}",
+        "MODE": qso.get("mode", "FT8"),
+        "FREQ": f"{qso['dial']/1e6:.6f}" if qso["dial"] else "",
         "BAND": qso["band"],
         "QSO_DATE": time.strftime("%Y%m%d", start),
         "TIME_ON": time.strftime("%H%M%S", start),
         "QSO_DATE_OFF": time.strftime("%Y%m%d", end),
         "TIME_OFF": time.strftime("%H%M%S", end),
-        "RST_SENT": f"{qso['sent']:+03d}",
-        "RST_RCVD": f"{qso['received']:+03d}",
+        "RST_SENT": report_text(qso.get("sent")),
+        "RST_RCVD": report_text(qso.get("received")),
         "GRIDSQUARE": qso.get("grid", ""),
         "APP_ICOMZERO_ID": qso["id"],
+        "COMMENT": qso.get("comment", ""),
     }
+    if fields["MODE"] in ("FT4", "PSK31"):
+        fields["SUBMODE"] = fields["MODE"]
+        fields["MODE"] = "MFSK" if fields["MODE"] == "FT4" else "PSK"
     return (
         "".join(f"<{k}:{len(str(v))}>{v}" for k, v in fields.items() if v != "")
         + "<EOR>"
@@ -180,6 +188,9 @@ class Logbook:
         self.worked_history = WorkedHistory(self.path)
         self.closed = threading.Event()
         self.wake = threading.Event()
+        from logsync import ContactSync
+
+        self.contact_sync = ContactSync(self)
         self.status = "Local log ready"
         self.thread = threading.Thread(target=self.work, daemon=True)
         self.thread.start()
@@ -198,11 +209,22 @@ class Logbook:
         settings = load_settings()
         with self.db() as db:
             for (payload,) in db.execute(
-                "SELECT payload FROM qsos ORDER BY rowid DESC LIMIT 100"
+                "SELECT payload FROM qsos WHERE id=? OR (json_extract(payload,'$.call')=? "
+                "AND json_extract(payload,'$.own_call')=? AND json_extract(payload,'$.dial')=? "
+                "AND json_extract(payload,'$.start')<=? AND json_extract(payload,'$.end')>=?)",
+                (
+                    qso["id"],
+                    qso["call"],
+                    qso["own_call"],
+                    qso["dial"],
+                    qso["end"],
+                    qso["start"],
+                ),
             ):
                 prior = json.loads(payload)
                 if prior["id"] == qso["id"] or (
                     all(prior[k] == qso[k] for k in ("call", "own_call", "dial"))
+                    and prior.get("mode", "FT8") == qso.get("mode", "FT8")
                     and prior["start"] <= qso["end"]
                     and qso["start"] <= prior["end"]
                 ):
@@ -218,6 +240,7 @@ class Logbook:
                         "INSERT OR IGNORE INTO deliveries VALUES (?,?,?,?)",
                         (qso["id"], service, "pending", ""),
                     )
+                    self.contact_sync.bind(db, service, qso["id"], settings)
         try:
             self.worked_history.add_local(qso)
         except (OSError, ValueError, sqlite3.Error):
@@ -227,11 +250,33 @@ class Logbook:
         return True
 
     def recent(self):
+        return self.page(0, 100)[0]
+
+    def page(self, offset=0, limit=4, search=""):
+        """Read only the visible rows, ordered by contact time (including imports)."""
+        search = str(search).strip().upper()
+        where = (
+            "WHERE instr(upper(json_extract(payload,'$.call')),?)>0" if search else ""
+        )
+        args = (search,) if search else ()
         with self.db() as db:
+            count = db.execute("SELECT count(*) FROM qsos " + where, args).fetchone()[0]
             rows = db.execute(
-                "SELECT payload FROM qsos ORDER BY rowid DESC LIMIT 100"
+                "SELECT payload FROM qsos "
+                + where
+                + " ORDER BY json_extract(payload,'$.start') DESC,id DESC LIMIT ? OFFSET ?",
+                args + (max(1, min(100, int(limit))), max(0, int(offset))),
             ).fetchall()
-        return [json.loads(row[0]) for row in rows]
+        return [json.loads(row[0]) for row in rows], count
+
+    def delivery_states(self, qso_id):
+        with self.db() as db:
+            return dict(
+                db.execute("SELECT service,state FROM deliveries WHERE id=?", (qso_id,))
+            )
+
+    def sync_contacts(self, service, settings=None):
+        self.contact_sync.start(service, settings or load_settings())
 
     def summary(self):
         with self.db() as db:
@@ -269,14 +314,19 @@ class Logbook:
             self.wake.clear()
             with self.db() as db:
                 pending = db.execute(
-                    "SELECT d.id,d.service,q.adif FROM deliveries d JOIN qsos q ON q.id=d.id WHERE d.state=?",
+                    "SELECT d.id,d.service,q.adif,a.account FROM deliveries d JOIN qsos q ON q.id=d.id LEFT JOIN delivery_accounts a ON a.id=d.id AND a.service=d.service WHERE d.state=?",
                     ("pending",),
                 ).fetchall()
-            for qso_id, service, record in pending:
+            for qso_id, service, record, bound_account in pending:
                 if self.closed.is_set():
                     break
                 settings = load_settings()
                 if not settings.get(service + "_enabled"):
+                    continue
+                from ft8history import account_id
+
+                if bound_account and bound_account != account_id(service, settings):
+                    self.status = service.title() + " account changed; use Log sync"
                     continue
                 try:
                     if service == "wavelog":
@@ -319,6 +369,13 @@ class Logbook:
                             "UPDATE deliveries SET state=?,error=? WHERE id=? AND service=?",
                             ("sent", "", qso_id, service),
                         )
+                    from ft8history import account_id
+
+                    with self.db() as db:
+                        db.execute(
+                            "INSERT OR IGNORE INTO contact_sync_presence VALUES (?,?)",
+                            (account_id(service, settings), qso_id),
+                        )
                     self.status = service.title() + " upload complete"
                 except Exception as error:
                     # Never retain server bodies/URLs that may contain credentials.
@@ -333,4 +390,5 @@ class Logbook:
         self.closed.set()
         self.wake.set()
         self.thread.join(timeout=0.5)
+        self.contact_sync.close()
         self.worked_history.close()
