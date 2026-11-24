@@ -33,6 +33,19 @@ GREEN = "#70edbb"
 RED = "#f07979"
 
 
+def fresh_meter(state, name, now):
+    """TX resets meters/timestamps to None until fresh telemetry arrives."""
+    stamp = state.get(name + "_at")
+    value = (
+        state.get("watts_display", state.get(name))
+        if name == "watts"
+        else state.get(name)
+    )
+    if not isinstance(stamp, (int, float)) or not 0 <= now - stamp <= 1.2:
+        return None
+    return value if isinstance(value, (int, float)) and np.isfinite(value) else None
+
+
 class Spectrum:
     """Native-width data pixels only; all labels are Tk text, never enlarged."""
 
@@ -295,7 +308,14 @@ class DesktopApp:
         self.notice.pack(side="left")
         self.state_label = ttk.Label(footer, text="Ready", style="Muted.TLabel")
         self.state_label.pack(side="right")
-        self.tabs = ttk.Notebook(self.root)
+        self.style.layout("Pages.TNotebook", [("Notebook.client", {"sticky": "nswe"})])
+        self.style.layout("Pages.TNotebook.Tab", [])
+        self.style.configure("Pages.TNotebook.Tab", padding=0, borderwidth=0)
+        self.nav = ttk.Frame(self.root, padding=(16, 2))
+        self.nav.pack(fill="x", pady=(0, 7))
+        self.nav_items = {}
+        self.ft8_alert = False
+        self.tabs = ttk.Notebook(self.root, style="Pages.TNotebook")
         self.tabs.pack(fill="both", expand=True, padx=12)
         self.frames = {}
         for key, title in (
@@ -307,6 +327,25 @@ class DesktopApp:
             frame = ttk.Frame(self.tabs, padding=12)
             self.frames[key] = frame
             self.tabs.add(frame, text=title)
+            item = tk.Canvas(
+                self.nav,
+                width=138,
+                height=42,
+                background=BG,
+                highlightthickness=0,
+                takefocus=True,
+                cursor="hand2",
+            )
+            item.pack(side="left", padx=(0, 8))
+            item.tab_key = key
+            item.bind(
+                "<Button-1>", lambda _, key=key: self.tabs.select(self.frames[key])
+            )
+            item.bind("<Enter>", lambda _, key=key: self.draw_tab(key, hover=True))
+            item.bind("<Leave>", lambda _, key=key: self.draw_tab(key, hover=False))
+            item.bind("<FocusIn>", lambda _, key=key: self.draw_tab(key))
+            item.bind("<FocusOut>", lambda _, key=key: self.draw_tab(key))
+            self.nav_items[key] = item
         self.build_radio()
         self.build_ft8()
         self.build_log()
@@ -365,6 +404,7 @@ class DesktopApp:
 
     def tab_changed(self, _=None):
         view = self.current()
+        self.refresh_tabs()
         self.safe(lambda: self.sessions.select_view(view))
         {
             "radio": self.radio_canvas,
@@ -374,6 +414,102 @@ class DesktopApp:
         }[view].focus_set()
         if view == "log":
             self.refresh_log(force=True)
+
+    def draw_tab(self, key, hover=None):
+        canvas = self.nav_items[key]
+        if hover is not None:
+            canvas.hover = hover
+        hover = getattr(canvas, "hover", False)
+        selected = self.current() == key
+        canvas.delete("all")
+        fill = "#20443e" if selected else ("#253944" if hover else "#182832")
+        edge = (
+            GREEN
+            if selected
+            else ("#657e89" if canvas == self.root.focus_get() else fill)
+        )
+        # Rounded native vector pill; text stays at system resolution.
+        canvas.create_polygon(
+            14,
+            2,
+            124,
+            2,
+            136,
+            2,
+            136,
+            14,
+            136,
+            28,
+            136,
+            40,
+            124,
+            40,
+            14,
+            40,
+            2,
+            40,
+            2,
+            28,
+            2,
+            14,
+            2,
+            2,
+            smooth=True,
+            splinesteps=24,
+            fill=fill,
+            outline=edge,
+            width=1,
+        )
+        color = GREEN if selected else TEXT
+        x, y = 22, 21
+        if key == "radio":
+            canvas.create_oval(x - 6, y - 6, x + 6, y + 6, outline=color, width=2)
+            canvas.create_oval(x - 2, y - 2, x + 2, y + 2, fill=color, outline="")
+        elif key == "ft8":
+            for dx, height in ((-6, 5), (-2, 10), (2, 7), (6, 12)):
+                canvas.create_line(
+                    x + dx, y - height / 2, x + dx, y + height / 2, fill=color, width=2
+                )
+        elif key == "log":
+            canvas.create_rectangle(
+                x - 7, y - 8, x + 6, y + 8, outline=color, width=1.5
+            )
+            for dy in (-4, 0, 4):
+                canvas.create_line(x - 4, y + dy, x + 3, y + dy, fill=color)
+        else:
+            canvas.create_oval(x - 7, y - 7, x + 7, y + 7, outline=color, width=2)
+            canvas.create_oval(x - 2, y - 2, x + 2, y + 2, outline=color)
+            for dx, dy in ((0, -10), (0, 10), (-10, 0), (10, 0)):
+                canvas.create_line(
+                    x + dx * 0.65, y + dy * 0.65, x + dx, y + dy, fill=color, width=2
+                )
+        canvas.create_text(
+            42,
+            21,
+            text={"radio": "Radio", "ft8": "FT8", "log": "Log", "settings": "Settings"}[
+                key
+            ],
+            anchor="w",
+            fill=color,
+            font=("DejaVu Sans", 11, "bold" if selected else "normal"),
+        )
+        if key == "ft8" and self.ft8_alert:
+            canvas.create_oval(117, 17, 125, 25, fill="#ff656f", outline="")
+
+    def refresh_tabs(self):
+        rx = self.sessions.rx
+        self.ft8_alert = bool(
+            self.sessions.mode == "ft8"
+            and (
+                self.sessions.armed
+                or (
+                    rx
+                    and (rx.radio_state.get("ptt") or rx.radio_state.get("ptt_pending"))
+                )
+            )
+        )
+        for key in self.nav_items:
+            self.draw_tab(key)
 
     def connect(self, mode):
         if self.sessions.mode == mode and self.sessions.rx and self.sessions.rx.busy():
@@ -1477,6 +1613,7 @@ class DesktopApp:
             s = self.sessions
             s.tick()
             rx = s.rx
+            self.refresh_tabs()
             if s.switching:
                 label = "Switching radio session…"
             elif rx:
@@ -1542,16 +1679,8 @@ class DesktopApp:
                 state = rx.radio_state
                 if state.get("ptt") or s.armed:
                     now = time.monotonic()
-                    swr = (
-                        state.get("swr")
-                        if now - state.get("swr_at", 0) <= 1.2
-                        else None
-                    )
-                    watts = (
-                        state.get("watts_display", state.get("watts"))
-                        if now - state.get("watts_at", 0) <= 1.2
-                        else None
-                    )
+                    swr = fresh_meter(state, "swr", now)
+                    watts = fresh_meter(state, "watts", now)
                     self.state_label.configure(
                         text=(
                             ("TX" if state.get("ptt") else "● Armed")
@@ -1665,6 +1794,12 @@ class DesktopApp:
             return "break"
         if self.closing:
             return "break"
+        if event.keysym in ("Return", "space") and isinstance(
+            getattr(event.widget, "tab_key", None), str
+        ):
+            if not repeated:
+                self.tabs.select(self.frames[event.widget.tab_key])
+            return "break"
         kind = event.widget.winfo_class()
         if kind in (
             "Entry",
@@ -1777,11 +1912,27 @@ class DesktopApp:
         self.root.destroy()
 
     def run(self):
+        import signal
+
+        # Tk reports exceptions raised inside callbacks instead of necessarily
+        # leaving mainloop. Signals must explicitly start orderly async closure.
+        previous = {
+            sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGINT)
+        }
+        for sig in previous:
+            signal.signal(sig, lambda *_: self.root.after_idle(self.close))
         try:
-            self.root.mainloop()
-        except KeyboardInterrupt:
-            self.close()
-            self.root.mainloop()
+            try:
+                self.root.mainloop()
+            except KeyboardInterrupt:
+                self.close()
+                self.root.mainloop()
+        finally:
+            if not self.closing:
+                self.close()
+                self.root.mainloop()
+            for sig, handler in previous.items():
+                signal.signal(sig, handler)
         if getattr(self, "restart", False):
             import os, sys
 

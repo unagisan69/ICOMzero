@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.19.1 — 2026-11-23
+
+- Refresh uConsole navigation with rounded icon tabs and a persistent red FT8 armed/transmitting dot.
+- Fix the desktop interface TypeError when TX resets meter timestamps to missing values; hide unavailable or stale SWR/power readings until fresh telemetry arrives.
+- Share orderly shutdown across Cardputer and uConsole: cancel queued/current TX, stop tuning, request receive state, and wait for transport PTT-off/logout before exiting. Preserve cleanup even when settings or tuning restoration fail; ignore repeated close signals during cleanup.
+- Add meter-reset and shutdown-order regressions.
+
 ## 0.19.0 — 2026-11-23
 
 - Replace the scaled uConsole interface with native desktop fonts, controls, full-width spectrum/waterfall and resizable FT8/log tables. Keep the Cardputer interface unchanged.
