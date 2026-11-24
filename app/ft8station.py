@@ -1,6 +1,9 @@
 """Non-blocking station controller; UI actions explicitly arm a contact/CQ."""
 
 import queue
+import csv
+import math
+import shutil
 import json
 import re
 import os
@@ -12,6 +15,44 @@ from ft8qso import Sequencer, waveform, finalize_contact
 from ft8log import load_settings, directory
 from ft8auto import AutoCQ, SessionLog
 from notifications import Sounds
+
+
+def chrony_health(report, now=None):
+    """Check current remaining correction, not a historical NTP sample."""
+    fields = next(csv.reader([report.strip()]))
+    if len(fields) == 14:
+        # Current chronyc CSV includes a reference-name column after its ID.
+        fields = [fields[0]] + fields[2:]
+    if len(fields) != 13:
+        raise ValueError("Invalid chrony tracking report")
+    reference, stratum = fields[0], int(fields[1])
+    stamp, correction = float(fields[2]), float(fields[3])
+    skew, delay, dispersion, interval = map(float, fields[8:12])
+    if not all(
+        math.isfinite(v) for v in (stamp, correction, skew, delay, dispersion, interval)
+    ):
+        raise ValueError("Invalid chrony tracking values")
+    if (
+        fields[12] not in ("Normal", "Insert second", "Delete second")
+        or not 1 <= stratum <= 15
+        or reference.upper() in ("00000000", "7F7F0101")
+    ):
+        return False, "Clock not synchronized"
+    age = (time.time() if now is None else now) - stamp
+    if not -5 <= age <= max(180, min(900, interval * 3)):
+        return False, "Clock reference stale; TX blocked"
+    # Include network uncertainty and drift since the last accepted sample.
+    uncertainty = (
+        abs(correction)
+        + abs(delay) / 2
+        + abs(dispersion)
+        + max(0, age) * abs(skew) / 1e6
+    )
+    if abs(correction) > 0.250:
+        return False, f"Clock correction {correction*1000:+.0f}ms; TX blocked"
+    if uncertainty > 0.250:
+        return False, f"Clock uncertainty {uncertainty*1000:.0f}ms; TX blocked"
+    return True, f"Clock synced ({correction*1000:+.1f}ms)"
 
 
 def clock_health():
@@ -29,9 +70,20 @@ def clock_health():
         )
         if not sync:
             return False, "Clock not synchronized"
+        if shutil.which("chronyc"):
+            tracking = subprocess.run(
+                ["chronyc", "-n", "-c", "tracking"],
+                capture_output=True,
+                timeout=2,
+                env=env,
+            )
+            if tracking.returncode == 0:
+                return chrony_health(tracking.stdout.decode(errors="replace"))
         result = subprocess.run(
             ["timedatectl", "timesync-status"], capture_output=True, timeout=2, env=env
         )
+        if result.returncode != 0:
+            return False, "Clock sync could not be verified"
         match = re.search(
             r"Offset:\s*([+-]?[0-9.]+)(us|ms|s)", result.stdout.decode(errors="replace")
         )

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.19.2 — 2026-11-24
+
+- Support chrony clock monitoring for FT8. Check the current remaining system-clock correction and uncertainty instead of treating historical NTP sample offsets as current clock error.
+- Keep TX blocked for unsynchronized/local-only sources, stale references, excessive correction or uncertainty, and invalid tracking data. Preserve the systemd-timesyncd fallback.
+- Document recommended uConsole time synchronization and add regressions for current/legacy chrony CSV reports and clock safety checks.
+
 ## 0.19.1 — 2026-11-23
 
 - Refresh uConsole navigation with rounded icon tabs and a persistent red FT8 armed/transmitting dot.

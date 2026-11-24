@@ -642,7 +642,7 @@ class ClockOffset(unittest.TestCase):
                 subprocess.CompletedProcess([], 0, b"yes\n"),
                 subprocess.CompletedProcess([], 0, ("Offset: " + offset).encode()),
             ]
-            with patch("subprocess.run", side_effect=responses):
+            with patch("subprocess.run", side_effect=responses), patch("ft8station.shutil.which", return_value=None):
                 ok, status = clock_health()
             self.assertEqual(ok, expected, status)
 
