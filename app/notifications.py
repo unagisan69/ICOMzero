@@ -7,6 +7,7 @@ import queue
 import subprocess
 import threading
 import time
+from runtime import audio_device, playback_env
 
 from ft8log import load_settings
 
@@ -64,7 +65,7 @@ class Sounds:
                         "aplay",
                         "-q",
                         "-D",
-                        "pulse",
+                        audio_device(),
                         "-t",
                         "raw",
                         "-f",
@@ -79,10 +80,7 @@ class Sounds:
                     stderr=subprocess.DEVNULL,
                     timeout=2,
                     check=False,
-                    env={
-                        **os.environ,
-                        "PULSE_SINK": "alsa_output.platform-sound.stereo-fallback",
-                    },
+                    env=playback_env(),
                 )
             except (OSError, subprocess.SubprocessError):
                 pass

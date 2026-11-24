@@ -22,6 +22,7 @@ class SettingsScreens:
         self.store = store or ProfileStore()
 
     def frame(self, title, subtitle="", footer="F / X select   Ent open   Esc back"):
+        self.display.pointer_regions = []
         image = Image.new("RGB", (320, 170), BG)
         draw = ImageDraw.Draw(image)
         draw.text((12, 7), title, font=self.display.fonts["title"], fill=TEXT)
@@ -49,6 +50,14 @@ class SettingsScreens:
                         draw.rounded_rectangle(
                             (8, y - 1, 312, y + 17), 4, fill=CARD, outline=ACCENT
                         )
+                    delta = i - choice
+                    events = [(33 if delta < 0 else 45, 1)] * abs(delta) + [
+                        (28, 1),
+                        (28, 0),
+                    ]
+                    self.display.pointer_regions.append(
+                        ((8, y - 1, 312, y + 17), events)
+                    )
                     self.text(
                         draw,
                         (15, y),
@@ -74,18 +83,32 @@ class SettingsScreens:
         self.select(title, ["Back"], message)
 
     def input(self, title, initial="", *, secret=False, limit=256, numeric=False):
+        self.display.text_input = True
+        try:
+            return self._input(
+                title, initial, secret=secret, limit=limit, numeric=numeric
+            )
+        finally:
+            self.display.text_input = False
+
+    def _input(self, title, initial="", *, secret=False, limit=256, numeric=False):
         value = str(initial)
+        cursor = len(value)
         shift = set()
         painted = None
         while True:
-            state = (value, bool(shift))
+            state = (value, cursor, bool(shift))
             if state != painted:
                 image, draw = self.frame(
                     title, "Enter saves · Esc cancels", "Backspace erase   Del clear"
                 )
                 draw.rounded_rectangle((10, 64, 310, 111), 7, fill=CARD, outline=ACCENT)
                 visible = ("•" * len(value)) if secret else value
-                self.text(draw, (20, 80), visible[-36:] + "▏", ACCENT, width=280)
+                first = max(0, cursor - 32)
+                visible = visible[:cursor] + "▏" + visible[cursor:]
+                self.text(
+                    draw, (20, 80), visible[first : first + 37], ACCENT, width=280
+                )
                 self.display.present(image)
                 painted = state
             for key, pressed in self.events(self.keyboard):
@@ -99,9 +122,20 @@ class SettingsScreens:
                 if key == 28 and pressed == 1:
                     return value
                 if key == 14:
-                    value = value[:-1]
+                    if cursor:
+                        value = value[: cursor - 1] + value[cursor:]
+                        cursor -= 1
+                elif key == 105:
+                    cursor = max(0, cursor - 1)
+                elif key == 106:
+                    cursor = min(len(value), cursor + 1)
+                elif key == 102:
+                    cursor = 0
+                elif key == 107:
+                    cursor = len(value)
                 elif key == 111:
                     value = ""
+                    cursor = 0
                 else:
                     char = self.character(key, shift)
                     if (
@@ -109,7 +143,8 @@ class SettingsScreens:
                         and len(value) < limit
                         and (not numeric or char.isdecimal())
                     ):
-                        value += char
+                        value = value[:cursor] + char + value[cursor:]
+                        cursor += len(char)
 
     def edit_radio(self, profile_id):
         choice = 0

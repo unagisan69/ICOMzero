@@ -123,6 +123,29 @@ class SettingsInterface(unittest.TestCase):
         self.assertNotIn("x▏", texts)
         self.assertFalse(self.store.path.exists())
 
+    def test_text_cursor_moves_with_arrows_without_changing_saved_value(self):
+        events = iter(
+            [
+                (105, 1),
+                (0x100000 + ord("b"), 1),
+                (102, 1),
+                (106, 1),
+                (14, 1),
+                (0x100000 + ord("a"), 1),
+                (107, 1),
+                (28, 1),
+            ]
+        )
+        screen = SettingsScreens(
+            self.display,
+            -1,
+            lambda *_: [next(events)],
+            self.module["text_character"],
+            self.store,
+        )
+        self.assertEqual(screen.input("Cursor test", "ac"), "abc")
+        self.assertFalse(self.display.text_input)
+
     def test_download_progress_is_visible_and_esc_cancels(self):
         update = SimpleNamespace(
             state="downloading",

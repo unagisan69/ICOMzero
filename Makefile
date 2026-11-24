@@ -6,7 +6,7 @@ FT8_SOURCES = $(wildcard vendor/ft8_lib/ft8/*.c)
 FT8_SOURCES += vendor/ft8_lib/common/monitor.c
 FT8_SOURCES += $(wildcard vendor/ft8_lib/fft/*.c)
 
-.PHONY: package check test decoder
+.PHONY: package package-desktop check test decoder
 decoder: $(DECODER) build/icomzero-ft8-encode
 
 $(DECODER): native/ft8_decode.c $(FT8_SOURCES) $(wildcard vendor/ft8_lib/ft8/*.h vendor/ft8_lib/fft/*.h vendor/ft8_lib/common/*.h)
@@ -26,3 +26,6 @@ test: decoder
 
 check:
 	python3 -m py_compile app/icomzero app/*.py
+
+package-desktop:
+	bash packaging/build-desktop.sh

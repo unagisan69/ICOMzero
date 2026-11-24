@@ -26,12 +26,12 @@ from countries import message_country, activation_cq, short_country
 from models import MIN_HZ, MAX_HZ, DEFAULT_PROFILE, PROFILES, RADIO_CHOICES, presets
 from radio import FT8_RATE, RATE, RadioError, ConnectionLost, encode, listen
 from profiles import ProfileStore, FIELDS, DEFAULTS, STEPS
+from runtime import playback_env, target as runtime_target
 from version import VERSION
 from settings_ui import RestartApp
 
 CONFIG = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "icomzero/radio.json"
-SPEAKER = "pulse"
-SPEAKER_SINK = "alsa_output.platform-sound.stereo-fallback"
+SPEAKER = os.environ.get("ICOMZERO_AUDIO_DEVICE", "pulse")
 EVENT = struct.Struct("@llHHi")
 WIDTH, HEIGHT = 320, 170
 BG, CARD, WHITE, MUTED, GREEN = "#101a21", "#1d2d36", "#f0f6f6", "#9bb2bb", "#70edbb"
@@ -65,6 +65,8 @@ CARDPUTER_SYMBOLS = {
 
 
 def text_character(key, shift=False):
+    if 0x100000 <= key <= 0x20ffff:
+        return chr(key - 0x100000)
     if key in CARDPUTER_SYMBOLS:
         return CARDPUTER_SYMBOLS[key]
     char = KEYS.get(key)
@@ -173,7 +175,7 @@ class Receiver:
                 ["aplay", "-q", "-D", SPEAKER, "-t", "raw", "-f", "S16_LE",
                  "-c", "1", "-r", str(RATE), "--buffer-time=300000", "--period-time=30000"],
                 stdin=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0,
-                env={**os.environ, "PULSE_SINK": SPEAKER_SINK},
+                env=playback_env(),
             )
 
         try:
@@ -399,6 +401,11 @@ class Display:
         if self.stride < (x + WIDTH) * 2:
             raise OSError("Invalid LCD stride")
         self.offset = y * self.stride + x * 2
+        self.init_graphics()
+
+    def init_graphics(self):
+        self.pointer_regions = []
+        self.text_input = False
         font = "/usr/share/fonts/truetype/dejavu/DejaVuSans"
         self.history = Image.new("RGB", (WATERFALL_W, WATERFALL_H), "#080f20")
         self.sweep = None
@@ -466,6 +473,7 @@ class Display:
 
     def render(self, values, selected, editing, status, volume, busy, frequency,
                scope, band, volume_visible, radio_state=None, help_open=False, radio_menu=None, step=1000, cw=None, cw_enabled=False, cw_tone=None, zoom=1):
+        self.pointer_regions = []
         image = Image.new("RGB", (WIDTH, HEIGHT), BG)
         draw = ImageDraw.Draw(image)
 
@@ -543,6 +551,7 @@ class Display:
             label(12, 155, "Ent - ■" if busy else "Ent - ▶", "small", MUTED)
             label(110, 155, "S - Settings", "small", MUTED)
             label(240, 155, "Tab - Help", "small", MUTED)
+            self.pointer_regions = [((12,151,105,169),[(28,1),(28,0)]), ((110,151,230,169),[(31,1),(31,0)]), ((240,151,319,169),[(15,1),(15,0)])]
         if cw is not None and band is None:
             draw.rounded_rectangle((8, 94, 312, 152), 5, fill="#111f2d", outline="#355361")
             detail = f"~{cw['pitch']} Hz" if cw.get("pitch") else cw.get("status", "Listening for CW")
@@ -573,15 +582,15 @@ class Display:
             draw.rounded_rectangle((6, 4, 314, 165), radius=7, fill=BG, outline=GREEN)
             label(18, 10, "Keyboard shortcuts", color=GREEN)
             shortcuts = (
-                ("Z / C", "Tune down / up (hold)"),
+                (("← / →" if runtime_target()=="desktop" else "Z / C"), "Tune down / up (hold)"),
                 ("B", "Band selection"),
                 ("M", "USB / LSB"),
                 ("N", "Noise reduction on / off" if profile["nr"] else "Noise reduction unavailable"),
                 ("T", "Antenna tune (transmits)" if profile["tuner"] and profile["transmit"] else "No antenna tuner"),
-                ("Fn + S / D", "Volume down / up"),
-                ("Fn + A", "Mute / unmute"),
+                (("Ctrl ←/→" if runtime_target()=="desktop" else "Fn + S / D"), "Volume down / up"),
+                (("Ctrl + M" if runtime_target()=="desktop" else "Fn + A"), "Mute / unmute"),
                 ("W", "CW decoder on / off"),
-                ("F / X", "History / Fn: zoom in/out"),
+                (("↑ / ↓" if runtime_target()=="desktop" else "F / X"), "History / Ctrl: zoom" if runtime_target()=="desktop" else "History / Fn: zoom in/out"),
                 ("S / Esc", "Radio settings / menu"),
             )
             for index, (key, action) in enumerate(shortcuts):
@@ -810,6 +819,7 @@ def ui(lcd, keyboard):
         cw_decoder.close()
 
 def menu_frame(display, title, subtitle):
+    display.pointer_regions = []
     image = Image.new("RGB", (WIDTH, HEIGHT), BG)
     draw = ImageDraw.Draw(image)
     draw.text((12, 6), title, font=display.fonts["title"], fill=WHITE)
@@ -854,6 +864,7 @@ def home_icon(draw, center, kind, color):
 
 
 def home_frame(display, choice=0, profile_name="", checking=False):
+    display.pointer_regions = []
     image = Image.new("RGB", (WIDTH, HEIGHT), BG)
     draw = ImageDraw.Draw(image)
     draw.text((12, 7), "ICOMzero", font=display.fonts["title"], fill=WHITE)
@@ -866,6 +877,7 @@ def home_frame(display, choice=0, profile_name="", checking=False):
     for i,title in enumerate(("Radio", "FT8", "Log", "Settings")):
         left=9+i*77
         selected=i==choice
+        display.pointer_regions.append(((left,63,left+70,139), [(0x7000+i,1),(0x7000+i,0),(28,1),(28,0)]))
         draw.rounded_rectangle((left,63,left+70,139),9,fill="#173c49" if selected else CARD,outline=GREEN if selected else "#2b3e4b",width=2 if selected else 1)
         home_icon(draw,(left+35,91),i,GREEN if selected else MUTED)
         width=draw.textlength(title,font=display.fonts["body"])
@@ -895,6 +907,9 @@ def home(lcd, keyboard):
             display.present(home_frame(display,choice,active["name"] if active["connection"]["Host"] else "",update.state=="checking"))
             for key, pressed in keys_ready(keyboard):
                 if pressed != 1:
+                    continue
+                if 0x7000 <= key <= 0x7003:
+                    choice=key-0x7000
                     continue
                 if key == 1:
                     return
@@ -935,6 +950,7 @@ def ft8_frame(
 ):
     image = Image.new("RGB", (WIDTH, HEIGHT), BG)
     draw = ImageDraw.Draw(image)
+    display.pointer_regions = [((228,151,311,169),[(15,1),(15,0)])]
     meters = meters or {}
     rows = history.visible(11)
     body_key = (callsign, history.start, history.selected,
@@ -1399,8 +1415,8 @@ def ft8_ui(lcd, keyboard):
                         items = ["Sync with Wavelog", "Sync with QRZ", "Back"]
                     elif panel == "help":
                         items = [
-                            "F / Fn+F: previous decode",
-                            "X / Fn+X: next decode",
+                            "↑: previous decode" if runtime_target()=="desktop" else "F / Fn+F: previous decode",
+                            "↓: next decode" if runtime_target()=="desktop" else "X / Fn+X: next decode",
                             "Enter: answer selected CQ",
                             "Gold rows: your callsign",
                             "Auto Hz: follow selected signal",
@@ -1441,6 +1457,9 @@ def ft8_ui(lcd, keyboard):
                         range(first, min(first + 6, len(items)))
                     ):
                         y = 52 + row * 16
+                        if not editing:
+                            delta=index-choice
+                            display.pointer_regions.append(((8,y,312,y+16), [(33 if delta<0 else 45,1)]*abs(delta)+[(28,1),(28,0)]))
                         if index == choice:
                             draw.rounded_rectangle(
                                 (8, y, 312, y + 16), 3, fill=CARD, outline=GREEN
@@ -1494,6 +1513,7 @@ def ft8_ui(lcd, keyboard):
                     image = qso_popup(display, image, saved_qso)
                 display.present(image)
                 last_frame = now
+            display.text_input = editing
             for key, pressed in keys_ready(keyboard, 0.01):
                 if key in (KEY_FN, KEY_CARDPUTER_FN):
                     fn = bool(pressed)
@@ -1800,11 +1820,23 @@ def main():
     modes.add_argument("--configure", nargs=2, metavar=("HOST", "USERNAME"))
     modes.add_argument("--test-audio", type=float, metavar="SECONDS")
     modes.add_argument("--check-display", action="store_true", help=argparse.SUPPRESS)
+    frontend=parser.add_mutually_exclusive_group()
+    frontend.add_argument("--desktop", action="store_true", help="Use the Linux desktop window (uConsole)")
+    frontend.add_argument("--cardputer", action="store_true", help="Use the Cardputer LCD and keypad")
+    parser.add_argument("--fullscreen", action="store_true", help="Start the desktop window fullscreen")
+    parser.add_argument("--audio-device", help="ALSA playback device (default: pulse)")
     parser.add_argument("--port", default=None)
     parser.add_argument("--model", choices=RADIO_CHOICES, default=None)
     parser.add_argument("--audio-port", default=None)
     parser.add_argument("--admin", action="store_true")
     args = parser.parse_args()
+    desktop = args.desktop or (not args.cardputer and (os.environ.get("ICOMZERO_PLATFORM") == "desktop" or not Path("/dev/fb_lcd").exists()))
+    if desktop:
+        os.environ["ICOMZERO_PLATFORM"] = "desktop"
+    if args.audio_device:
+        global SPEAKER
+        SPEAKER = args.audio_device
+        os.environ["ICOMZERO_AUDIO_DEVICE"] = args.audio_device
     if args.configure:
         host, username = args.configure
         password = getpass.getpass("Radio password: ") if sys.stdin.isatty() else sys.stdin.readline().rstrip("\n")
@@ -1833,6 +1865,10 @@ def main():
             raise KeyboardInterrupt
 
         signal.signal(signal.SIGTERM, exit_on_signal)
+        if desktop:
+            from desktop import run
+            run(globals(), fullscreen=args.fullscreen)
+            return 0
         with open("/dev/fb_lcd", "r+b", buffering=0) as lcd:
             if args.check_display:
                 Display(lcd.fileno()).render(load(), None, False, "Disconnected", 60, False, None, None, None, False)

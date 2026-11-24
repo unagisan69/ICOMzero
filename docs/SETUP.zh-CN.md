@@ -1,6 +1,6 @@
 # ICOMzero 中文设置教程
 
-[返回项目首页](../README.md) · [English user guide](USER_GUIDE.md) · [下载最新版](https://github.com/unagisan69/ICOMzero/releases/latest)
+[uConsole 桌面版说明（英文）](UCONSOLE.md) · [返回项目首页](../README.md) · [English user guide](USER_GUIDE.md) · [下载最新版](https://github.com/unagisan69/ICOMzero/releases/latest)
 
 本教程适用于 **ICOMzero 0.16.7 及以后版本**，以 **IC-7300MK2** 为例。应用界面目前使用英文，下面保留屏幕上的英文菜单名称，并附中文说明；本教程不代表应用已经支持中文界面。
 
@@ -188,3 +188,9 @@ CW 解码仅接收，不会自动发报或记录 CW QSO。相邻电台干扰、R
 也可以在 App Store 中更新。更新保留电台配置和 QSO 历史。**Launch update check** 控制是否在启动时检查 GitHub 更新。
 
 如仍有问题，请在 [GitHub Issues](https://github.com/unagisan69/ICOMzero/issues) 或 [App Store 讨论区](https://github.com/CardputerZero/cardputerzero.github.io/discussions/51) 描述电台型号、应用版本、局域网/外网连接方式及屏幕错误原文；请先移除密码、API key 等私密信息。
+
+## uConsole 桌面版
+
+从 GitHub Releases 下载 **icomzero-desktop_0.18.0-1_arm64.deb**，在 ARM64 Debian 上使用 `sudo apt install ./icomzero-desktop_0.18.0-1_arm64.deb` 安装，然后从桌面应用菜单启动 ICOMzero。桌面版与 Cardputer 版安装包不同，请选文件名带 **desktop** 的版本。
+
+键盘为主要操作方式：↑/↓ 浏览菜单、日志或 FT8/CW 历史；←/→ 在 Radio 中调谐；Ctrl+↑/↓ 缩放；Ctrl+←/→ 音量；Ctrl+M 静音；Ctrl+Enter 全屏；Ctrl+Q 退出。轨迹球点击是可选方式。文本输入可直接使用句点等标点；共享设置表单支持方向键移动光标及 Ctrl+V 粘贴。桌面版使用系统默认音频输出，设置和日志仍保存在 `~/.config/icomzero/`。完整安装、迁移和按键说明见上面的 uConsole 文档。

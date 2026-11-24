@@ -11,6 +11,7 @@ import tempfile
 import time
 from pathlib import Path
 from urllib.request import Request, urlopen
+from runtime import release_asset
 from version import VERSION as __version__
 from update_log import TimingLog
 
@@ -100,7 +101,7 @@ class Updater:
         self.release = None
         if version(tag) <= version(self.current):
             return False
-        name = f'icomzero_{tag.lstrip("v")}-1_arm64.deb'
+        name = release_asset(tag.lstrip("v"))
         assets = {a["name"]: a["browser_download_url"] for a in release["assets"]}
         for asset in (name, "SHA256SUMS"):
             if assets.get(asset) != f"{REPO}/releases/download/{tag}/{asset}":

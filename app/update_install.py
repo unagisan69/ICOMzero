@@ -163,6 +163,14 @@ def _install(path, digest, version, report, cache_dir):
             ).strip()
             if value != expected:
                 raise ValueError("Wrong package metadata")
+        from runtime import target as runtime_target
+
+        if runtime_target() == "desktop":
+            platform = subprocess.check_output(
+                ["dpkg-deb", "-f", str(target), "X-ICOMzero-Platform"], text=True
+            ).strip()
+            if platform != "desktop":
+                raise ValueError("Wrong platform package")
         installed = subprocess.check_output(
             ["dpkg-query", "-W", "-f=${Version}", "icomzero"], text=True
         ).strip()

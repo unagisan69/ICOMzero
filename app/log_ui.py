@@ -18,6 +18,7 @@ def fit(draw, text, font, width):
 
 
 def log_frame(display, rows, total, selected=0, offset=0, search="", status=""):
+    display.pointer_regions = []
     image = Image.new("RGB", (320, 170), BG)
     draw = ImageDraw.Draw(image)
     font = display.fonts["small"]
@@ -34,6 +35,13 @@ def log_frame(display, rows, total, selected=0, offset=0, search="", status=""):
     for row, qso in enumerate(rows):
         y = 51 + row * 24
         active = row + offset == selected
+        delta = row + offset - selected
+        display.pointer_regions.append(
+            (
+                (8, y, 312, y + 22),
+                [(33 if delta < 0 else 45, 1)] * abs(delta) + [(28, 1), (28, 0)],
+            )
+        )
         draw.rounded_rectangle(
             (8, y, 312, y + 22),
             5,
@@ -73,6 +81,7 @@ def log_frame(display, rows, total, selected=0, offset=0, search="", status=""):
     draw.text((12, 153), "F / X browse   Ent view", font=font, fill=MUTED)
     draw.rounded_rectangle((229, 150, 311, 169), 5, fill=CARD)
     draw.text((236, 153), "Tab · Menu", font=font, fill=ACCENT)
+    display.pointer_regions.append(((229, 150, 311, 169), [(15, 1), (15, 0)]))
     return image
 
 

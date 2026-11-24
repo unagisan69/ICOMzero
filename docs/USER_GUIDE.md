@@ -1,6 +1,6 @@
 # ICOMzero user guide
 
-[简体中文设置教程](SETUP.zh-CN.md) · [← Overview](../README.md) · [Setup](#listen) · [CW](#cw-receive-decoder) · [FT8](#ft8-contacts) · [Auto CQ](#auto-cq) · [POTA Hunt](#pota-hunt) · [Logging](#logging) · [Build](#build-and-test)
+[uConsole desktop guide](UCONSOLE.md) · [简体中文设置教程](SETUP.zh-CN.md) · [← Overview](../README.md) · [Setup](#listen) · [CW](#cw-receive-decoder) · [FT8](#ft8-contacts) · [Auto CQ](#auto-cq) · [POTA Hunt](#pota-hunt) · [Logging](#logging) · [Build](#build-and-test)
 
 Listen to a network-connected radio on a **Cardputer Zero** running the stock M5Stack Debian image. ICOMzero connects directly to the radio over LAN or Wi-Fi and plays receive audio through the Cardputer speaker, with a live spectrum/waterfall, tuning, band presets, noise reduction, and antenna-tuner controls where the radio supports them.
 
@@ -71,7 +71,7 @@ The startup menu has **Radio**, **FT8**, **Log** and **Settings** icon cards. Th
 
 **Settings → Check for updates** checks stable releases from this GitHub repository. Launch checks run in the background with a seven-second limit; offline checks do not block the menu or interrupt a radio session. **Launch update check** can be turned off. When an update is available, choose View update and Download. The app shows transferred bytes and a progress bar, verifies SHA-256, then asks for the **device administrator password** to install. This is separate from radio/API credentials and is never saved. Installation validates package name, version and ARM64 architecture, refuses downgrades, and reports APT installation progress. Download can be cancelled; an installation already in progress is allowed to finish. Choose Restart after completion. Settings and QSO history are preserved. Private bounded timing logs contain stages/durations only; root installation output goes to `/var/log/icomzero-update.log`.
 
-The updater is adapted from [MeshCore Zero](https://github.com/unagisan69/meshcore-zero); its MIT notice is included in `docs/meshcore-updater-LICENSE`. Release maintainers must upload `icomzero_VERSION-1_arm64.deb` and **SHA256SUMS** together for a stable `vVERSION` release. SHA256SUMS names the package file without a path. The updater accepts only matching release assets from this repository over HTTPS.
+The updater is adapted from [MeshCore Zero](https://github.com/unagisan69/meshcore-zero); its MIT notice is included in `docs/meshcore-updater-LICENSE`. Release maintainers must upload both `icomzero_VERSION-1_arm64.deb` (Cardputer) and `icomzero-desktop_VERSION-1_arm64.deb` (uConsole/Linux), plus **SHA256SUMS** containing both filenames, together for a stable `vVERSION` release. SHA256SUMS names the package file without a path. The updater accepts only matching release assets from this repository over HTTPS.
 
 ## Onboard logbook
 

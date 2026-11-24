@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.18.0 — 2026-11-23
+
+- Add a keyboard-first uConsole/Linux ARM64 desktop frontend with a resizable/fullscreen window and optional pointer navigation, sharing the existing Radio, CW, FT8, Log and settings workflows.
+- Use arrow keys for navigation/history and tuning, Ctrl+arrows for zoom/volume, Ctrl+M for mute, Ctrl+Enter for fullscreen and Ctrl+Q for clean shutdown. Preserve held keys through desktop repeat and release them on focus loss. Add native text/punctuation/paste support and cursor movement in shared settings forms.
+- Route desktop playback and notifications through the system audio output; retain the Cardputer speaker routing.
+- Add a normal Debian desktop package, launcher/icon and separate updater asset/platform verification. Keep the Cardputer package and hardware frontend available.
+- Add desktop input, audio and updater regressions, plus uConsole installation/migration documentation.
+
 ## 0.17.0 — 2026-11-23
 
 - Add a fourth icon card, Log, to the main menu with a compact onboard contact browser, callsign search and details including upload state.

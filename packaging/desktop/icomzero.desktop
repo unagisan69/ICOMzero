@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=ICOMzero
+Comment=Network radio, waterfall, CW, FT8 and onboard logbook
+Exec=icomzero --desktop
+Icon=icomzero
+Terminal=false
+Categories=Network;HamRadio;
+Keywords=Icom;Kenwood;SDR;FT8;CW;uConsole;
+StartupWMClass=ICOMzero

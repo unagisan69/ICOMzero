@@ -4,7 +4,7 @@
 
 # ICOMzero
 
-**Your radio, on your Cardputer.**
+**Your radio, on your Cardputer or uConsole.**
 
 Direct network listening · Live waterfall · CW decoding · FT8 contacts & logging
 
@@ -13,11 +13,11 @@ Direct network listening · Live waterfall · CW decoding · FT8 contacts & logg
 [![Share code ICMZ](https://img.shields.io/badge/share_code-ICMZ-173c49?style=flat-square)](#install)
 [![GPL v3](https://img.shields.io/badge/license-GPL--3.0-blue?style=flat-square)](LICENSE)
 
-[简体中文设置教程](docs/SETUP.zh-CN.md) · [Install](#install) · [Features](#features) · [Controls](#controls) · [Supported radios](#supported-radios) · [User guide](docs/USER_GUIDE.md) · [Changelog](CHANGELOG.md)
+[uConsole guide](docs/UCONSOLE.md) · [简体中文设置教程](docs/SETUP.zh-CN.md) · [Install](#install) · [Features](#features) · [Controls](#controls) · [Supported radios](#supported-radios) · [User guide](docs/USER_GUIDE.md) · [Changelog](CHANGELOG.md)
 
 </div>
 
-ICOMzero connects a **Cardputer Zero running the stock M5Stack Debian image** directly to a supported Icom or Kenwood network radio. Listen, tune, read CW, or work FT8 from the handheld—without a computer bridge.
+ICOMzero connects a **Cardputer Zero running the stock M5Stack Debian image** or a **uConsole running ARM64 Debian** directly to a supported Icom or Kenwood network radio. Listen, tune, read CW, or work FT8 from the handheld—without a computer bridge.
 
 | Radio & waterfall | FT8 contacts |
 | :---: | :---: |
@@ -34,6 +34,18 @@ ICOMzero connects a **Cardputer Zero running the stock M5Stack Debian image** di
 1. Connect your Cardputer Zero to Wi-Fi and open **App Store**.
 2. Search for **ICOMzero**, or use share code **`ICMZ`**.
 3. Install, then open **ICOMzero** from APPLaunch.
+
+### On uConsole
+
+Download the **desktop ARM64 package** from [GitHub Releases](https://github.com/unagisan69/ICOMzero/releases/latest), then install it on the uConsole:
+
+```sh
+sudo apt install ./icomzero-desktop_0.18.0-1_arm64.deb
+```
+
+Open **ICOMzero** from the desktop menu. The resizable window is keyboard-first: **↑/↓ navigate**, **←/→ tune**, **Ctrl+↑/↓ zoom**, **Ctrl+←/→ volume**, **Ctrl+M mute**. Trackball navigation is optional. **Ctrl+Enter** toggles fullscreen; **Ctrl+Q** quits safely. Profiles and logs use the same private format as Cardputer.
+
+[Installation, full controls and migration →](docs/UCONSOLE.md)
 
 ### Updates
 
