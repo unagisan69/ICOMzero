@@ -89,6 +89,12 @@ icomzero --audio-device pulse
 
 `ICOMZERO_AUDIO_DEVICE` is also supported. If you explicitly set `PULSE_SINK`, the desktop build respects it. The default `pulse` device needs `libasound2-plugins`, included in the package dependencies.
 
+## FT8 clock synchronization
+
+Use an active NTP service before transmitting. **Chrony is recommended on uConsole** (`sudo apt install chrony`); it replaces systemd-timesyncd and monitors multiple time sources. Check `chronyc tracking` and `chronyc sources` after startup or a network change. Allow initial synchronization to settle before arming FT8.
+
+ICOMzero checks chrony's current **System time** correction, reference age and error estimate. A historical **Last offset** is not the remaining correction. TX remains blocked if synchronization is unavailable, correction or uncertainty exceeds 250 ms, or the accepted reference is stale. The original systemd-timesyncd check is retained for systems without chrony. Changing time services does not re-arm stopped automation.
+
 ## Updates
 
 Use **Settings → Logging & updates → Check for updates**. The desktop updater selects the **icomzero-desktop** asset and verifies SHA-256; the Cardputer updater continues to select its own asset. The desktop installer also checks the package’s platform marker before installation. Settings and logs are preserved. Fully close/reopen the app after an update.
