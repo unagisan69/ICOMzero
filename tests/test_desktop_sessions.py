@@ -173,6 +173,17 @@ class SessionsTests(unittest.TestCase):
         rx.start.assert_not_called()
         self.assertIn("RuntimeError", manager.error)
 
+    def test_station_failure_does_not_skip_receiver_or_decoder_cleanup(self):
+        manager, rx, decoder, station, _ = self.engine()
+        manager.rx, manager.decoder, manager.station = rx, decoder, station
+        manager.mode = "ft8"
+        station.close.side_effect = RuntimeError("fixture")
+        with self.assertRaises(RuntimeError):
+            manager.close()
+        self.assertTrue(rx.stop.is_set())
+        rx.stop_tx.assert_called()
+        decoder.close.assert_called_once()
+
     def test_stop_and_fault_clear_remain_available_without_band(self):
         manager, rx, _, station, _ = self.engine()
         manager.rx = rx
@@ -251,3 +262,27 @@ class NativeShortcuts(unittest.TestCase):
             SimpleNamespace(keycode=113, keysym="Left", state=0, widget=widget)
         )
         ui.tune.assert_not_called()
+
+
+class TabStatus(unittest.TestCase):
+    def test_dot_tracks_armed_and_actual_tx_even_from_other_tabs(self):
+        from desktop_ui import DesktopApp
+
+        ui = DesktopApp.__new__(DesktopApp)
+        ui.sessions = SimpleNamespace(
+            mode="ft8", armed=False, rx=SimpleNamespace(radio_state={"ptt": False})
+        )
+        ui.nav_items = {"ft8": None}
+        ui.draw_tab = Mock()
+        ui.refresh_tabs()
+        self.assertFalse(ui.ft8_alert)
+        ui.sessions.armed = True
+        ui.refresh_tabs()
+        self.assertTrue(ui.ft8_alert)
+        ui.sessions.armed = False
+        ui.sessions.rx.radio_state["ptt"] = True
+        ui.refresh_tabs()
+        self.assertTrue(ui.ft8_alert)
+        ui.sessions.mode = "radio"
+        ui.refresh_tabs()
+        self.assertFalse(ui.ft8_alert)

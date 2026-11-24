@@ -189,7 +189,7 @@ class Civ:
             self.pending.append(command)
 
     def ptt(self, enabled):
-        if self.tx_enabled:
+        if self.tx_enabled or not enabled:
             # PTT preempts tuning and polls but shares the radio's command pace.
             # An off request replaces an on request that has not been sent yet.
             self.ptt_wanted = bool(enabled)
@@ -426,7 +426,7 @@ class Civ:
                     self.power_target = None
                     self.on_state("power_ready", False)
                     self.power_applied = False
-                elif action in ("tuner_stop", "force_rx") and self.tx_enabled:
+                elif action in ("tuner_stop", "force_rx"):
                     self.cancel_tuner()
                     if action == "force_rx" or self.ptt_state or self.ptt_pending:
                         self.ptt(False)
@@ -680,7 +680,7 @@ class Civ:
 
     def close(self):
         commands = []
-        if self.tx_enabled:
+        if self.tx_enabled or self.ptt_state or self.tuning_requested or self.tuner_state == 2:
             self.ptt_wanted = None
             if (self.tuning_requested or self.tuner_state == 2) and hasattr(
                 self.channel, "sock"

@@ -280,7 +280,7 @@ class Cat:
             self.send(f"NR{int(self.nr)}")
 
     def ptt(self, enabled):
-        if self.tx_enabled:
+        if self.tx_enabled or not enabled:
             enabled = enabled and not self.protection.fault
             if enabled:
                 self.protection.begin()
@@ -376,7 +376,7 @@ class Cat:
             self.requested_power = int(value)
             self.power_target = None
             self.on_state("power_ready", False)
-        elif action in ("tuner_stop", "force_rx") and self.tx_enabled:
+        elif action in ("tuner_stop", "force_rx"):
             active_tuner = self.tuning_requested or self.tuner_state == 2
             self.tuning_requested = False
             self.ptt(False)
@@ -397,7 +397,7 @@ class Cat:
             self.send("AC111")
 
     def close(self):
-        if self.tx_enabled:
+        if self.tx_enabled or self.ptt_state or self.tuning_requested or self.tuner_state == 2:
             if self.tuning_requested or self.tuner_state == 2:
                 self.send("AC100")
             self.ptt(False)

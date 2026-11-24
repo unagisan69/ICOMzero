@@ -2,7 +2,7 @@
 """Cardputer Zero receiver and launcher UI."""
 
 import argparse
-from contextlib import suppress
+from contextlib import suppress, ExitStack
 import fcntl
 import getpass
 import json
@@ -21,6 +21,8 @@ import time
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
+
+from shutdown import stop_receiver
 
 from countries import message_country, activation_cq, short_country
 from models import MIN_HZ, MAX_HZ, DEFAULT_PROFILE, PROFILES, RADIO_CHOICES, presets
@@ -811,12 +813,11 @@ def ui(lcd, keyboard):
                         except RadioError as error:
                             rx.update(str(error))
     finally:
-        if save_at is not None:
-            save(values, rx.volume, rx.muted)
-        rx.stop.set()
-        if rx.thread is not None:
-            rx.thread.join(timeout=2)
-        cw_decoder.close()
+        with ExitStack() as cleanup:
+            cleanup.callback(cw_decoder.close)
+            cleanup.callback(stop_receiver, rx)
+            if save_at is not None:
+                save(values, rx.volume, rx.muted)
 
 def menu_frame(display, title, subtitle):
     display.pointer_regions = []
@@ -1802,17 +1803,12 @@ def ft8_ui(lcd, keyboard):
                     stop_tx()
                     band = min(range(len(bands)), key=lambda i: abs(bands[i][1] - dial))
     finally:
-        station.close()
-        rx.stop_tx()
-        decoder.activate(False)
-        # Give the transport's repeated PTT-off path time before restoring tuning.
-        time.sleep(0.45)
-        restore_radio()
-        rx.stop.set()
-        if rx.thread:
-            rx.thread.join(timeout=3)
-        decoder.close()
-        logbook.close()
+        with ExitStack() as cleanup:
+            cleanup.callback(logbook.close)
+            cleanup.callback(decoder.close)
+            cleanup.callback(stop_receiver, rx, before_disconnect=restore_radio)
+            cleanup.callback(decoder.activate, False)
+            cleanup.callback(station.close)
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -1862,9 +1858,13 @@ def main():
         return int(rx.busy() or not rx.written or rx.status != "Disconnected")
     else:
         def exit_on_signal(*_):
+            # A second close signal must not interrupt RF/socket cleanup.
+            signal.signal(signal.SIGTERM, signal.SIG_IGN)
+            signal.signal(signal.SIGINT, signal.SIG_IGN)
             raise KeyboardInterrupt
 
         signal.signal(signal.SIGTERM, exit_on_signal)
+        signal.signal(signal.SIGINT, exit_on_signal)
         if desktop:
             from desktop import run
             run(globals(), fullscreen=args.fullscreen)

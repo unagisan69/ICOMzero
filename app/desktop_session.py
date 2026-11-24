@@ -1,5 +1,6 @@
 """Persistent desktop sessions: presentation tabs do not own radio lifetimes."""
 
+from contextlib import ExitStack
 import threading
 import time
 
@@ -8,6 +9,7 @@ from ft8 import BANDS, Decoder as FT8Decoder, History
 from ft8station import Station
 from ft8log import load_settings
 from models import DEFAULT_PROFILE
+from shutdown import stop_receiver
 
 
 class Sessions:
@@ -112,22 +114,16 @@ class Sessions:
 
     def _stop(self):
         rx = self.rx
-        if self.station:
-            self.station.close()
-        if rx:
-            rx.stop_tx()
-        if self.decoder:
-            self.decoder.activate(False)
-        if rx and self.mode == "ft8" and rx.busy():
-            deadline = time.monotonic() + 1
-            while (
-                rx.radio_state.get("ptt") or rx.radio_state.get("ptt_pending")
-            ) and time.monotonic() < deadline:
-                time.sleep(0.03)
+
+        def restore():
             if (
-                self.previous
+                rx
+                and self.mode == "ft8"
+                and rx.busy()
+                and self.previous
                 and rx.radio_state.get("ptt") is False
                 and not rx.radio_state.get("ptt_pending")
+                and rx.radio_state.get("tuner") != 2
             ):
                 rx.tune(self.previous[0])
                 rx.command("mode", self.previous[1])
@@ -137,16 +133,18 @@ class Sessions:
                 ):
                     rx.command("nr")
                 time.sleep(0.25)
-        if rx:
-            rx.stop.set()
-            if rx.thread:
-                rx.thread.join(timeout=3)
-            if rx.busy():
-                raise RuntimeError("Previous radio session is still stopping")
-        if self.decoder:
-            self.decoder.close()
-        if self.cw:
-            self.cw.close()
+
+        with ExitStack() as cleanup:
+            if self.cw:
+                cleanup.callback(self.cw.close)
+            if self.decoder:
+                cleanup.callback(self.decoder.close)
+            if rx:
+                cleanup.callback(stop_receiver, rx, before_disconnect=restore)
+            if self.decoder:
+                cleanup.callback(self.decoder.activate, False)
+            if self.station:
+                cleanup.callback(self.station.close)
         self.rx = self.cw = self.decoder = self.station = None
         self.mode = None
 
@@ -314,7 +312,5 @@ class Sessions:
     def close(self):
         self.closed = True
         if self.worker and self.worker.is_alive():
-            self.worker.join(timeout=20)
-        if self.worker and self.worker.is_alive():
-            raise RuntimeError("Session shutdown is still in progress")
+            self.worker.join()
         self._stop()
