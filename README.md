@@ -43,7 +43,7 @@ Download the **desktop ARM64 package** from [GitHub Releases](https://github.com
 sudo apt install ./icomzero-desktop_0.18.0-1_arm64.deb
 ```
 
-Open **ICOMzero** from the desktop menu. The resizable window is keyboard-first: **↑/↓ navigate**, **←/→ tune**, **Ctrl+↑/↓ zoom**, **Ctrl+←/→ volume**, **Ctrl+M mute**. Trackball navigation is optional. **Ctrl+Enter** toggles fullscreen; **Ctrl+Q** quits safely. Profiles and logs use the same private format as Cardputer.
+Open **ICOMzero** from the desktop menu. The native desktop interface has crisp system fonts, a full-width spectrum/waterfall, and persistent **Radio · FT8 · Log · Settings** tabs. View or sync Log and browse Settings while Radio or FT8 continues. Switching Radio ↔ FT8 hands off the radio connection. **Ctrl+1–4** selects tabs and **Ctrl+Space** stops TX from any tab. The resizable window is keyboard-first: **↑/↓ navigate**, **←/→ tune**, **Ctrl+↑/↓ zoom**, **Ctrl+←/→ volume**, **Ctrl+M mute**. Trackball navigation is optional. **Ctrl+Enter** toggles fullscreen; **Ctrl+Q** quits safely. Profiles and logs use the same private format as Cardputer.
 
 [Installation, full controls and migration →](docs/UCONSOLE.md)
 

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.19.0 — 2026-11-23
+
+- Replace the scaled uConsole interface with native desktop fonts, controls, full-width spectrum/waterfall and resizable FT8/log tables. Keep the Cardputer interface unchanged.
+- Add persistent Radio, FT8, Log and Settings tabs. Reception, decoding and FT8 sequencing continue while viewing or syncing logs and browsing settings. Only switching Radio/FT8 hands off the radio session.
+- Add native profile, station, logging and update forms; searchable contact history and manual entry. Protect connection/station edits during active sessions and expose global TX status and Stop TX.
+- Add Ctrl+1–4 tab shortcuts, Ctrl+Tab cycling, standard keyboard focus/editing and Ctrl+Space emergency stop. Preserve arrow tuning, CW scrollback, zoom and volume controls.
+- Cover hidden-session continuity, safe handoff, reconnect behavior, native rendering dimensions and keyboard focus with regression tests.
+
 ## 0.18.0 — 2026-11-23
 
 - Add a keyboard-first uConsole/Linux ARM64 desktop frontend with a resizable/fullscreen window and optional pointer navigation, sharing the existing Radio, CW, FT8, Log and settings workflows.

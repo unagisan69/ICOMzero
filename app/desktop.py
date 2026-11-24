@@ -271,7 +271,7 @@ class Context:
         self.root.destroy()
 
 
-def run(app, fullscreen=False, setup=None):
+def run_compact(app, fullscreen=False, setup=None):
     context = Context(app, fullscreen)
     base = app["Display"]
 
@@ -305,3 +305,12 @@ def run(app, fullscreen=False, setup=None):
                 original_keys,
             )
         context.close()
+
+
+def run(app, fullscreen=False, setup=None):
+    from desktop_ui import DesktopApp
+
+    window = DesktopApp(app, fullscreen)
+    if setup:
+        setup(window)
+    window.run()
