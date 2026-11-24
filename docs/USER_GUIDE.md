@@ -29,7 +29,7 @@ Connect the Cardputer to a network that can reach the radio and enable the radio
 For manual installation, download the `.deb` from [GitHub Releases](https://github.com/unagisan69/ICOMzero/releases), then install it on the Cardputer.
 
 ```sh
-sudo apt install ./icomzero_0.17.0-1_arm64.deb
+sudo apt install ./icomzero_0.18.0-1_arm64.deb
 ```
 
 Open **ICOMzero** from APPLaunch after installation.
@@ -167,7 +167,7 @@ sudo apt install build-essential python3-pil python3-numpy fonts-dejavu-core
 make check
 make test
 make package
-sudo apt install ./build/icomzero_0.17.0-1_arm64.deb
+sudo apt install ./build/icomzero_0.18.0-1_arm64.deb
 ```
 
 Use `make package APPBUILDER=/path/to/AppBuilder` for another checkout location. The package includes a foreground APPLaunch entry and declares its Python, Pillow, NumPy, font, ALSA, and PipeWire dependencies.
