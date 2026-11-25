@@ -84,6 +84,18 @@ class History:
         self.selected = None
         self.start = 0
         self.fingerprint = None
+        self.retained = set()
+
+    def retain_contact(self, call, messages=None):
+        """Keep the completed exchange until its rows age out of RX history."""
+        from ft8qso import call_fields
+
+        self.retained.update(
+            m.key
+            for m in (self.messages if messages is None else messages)
+            if call_fields(m)[0] == call
+        )
+        self.fingerprint = None
 
     def update(self, messages, callsign, worked=(), partner=""):
         fingerprint = (
@@ -97,6 +109,7 @@ class History:
         if fingerprint == self.fingerprint:
             return
         self.fingerprint = fingerprint
+        self.retained.intersection_update(m.key for m in messages)
         from ft8qso import call_fields
 
         self.messages = sorted(
@@ -106,6 +119,8 @@ class History:
                 if (m.local_tx or m.text.startswith("CQ ") or m.involves(callsign))
                 and (
                     m.local_tx
+                    or m.involves(callsign)
+                    or m.key in self.retained
                     or call_fields(m)[0] == partner
                     or call_fields(m)[0] not in worked
                 )

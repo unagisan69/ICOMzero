@@ -30,7 +30,7 @@ Maintainer: unagisan69
 Section: hamradio
 Priority: optional
 X-ICOMzero-Platform: desktop
-Depends: libc6, python3, python3-tk, python3-pil, python3-pil.imagetk, python3-numpy, fonts-dejavu-core, alsa-utils, libasound2-plugins, pipewire-pulse
+Depends: libc6, python3, python3-tk, python3-pil, python3-pil.imagetk, python3-numpy, fonts-dejavu-core, alsa-utils, libasound2-plugins, pipewire-pulse, libnotify-bin
 Homepage: https://github.com/unagisan69/ICOMzero
 Description: Network radio, CW, FT8 and logbook for uConsole/Linux ARM64
  Native tabbed desktop interface using the direct radio protocols.

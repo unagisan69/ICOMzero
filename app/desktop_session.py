@@ -31,6 +31,7 @@ class Sessions:
         self.cw_enabled = False
         self.cw_tone = None
         self.history = History()
+        self.qso_revision = 0
         self.previous = None
         self.revision = None
         self.configured = self.ready = self.pending_tune = False
@@ -96,6 +97,7 @@ class Sessions:
             self.dial = None
             self.first_entry = True
             self.history = History()
+            self.qso_revision = 0
             self.revision = rx.session_revision
             rx.start(settings)
         except Exception as error:
@@ -174,6 +176,7 @@ class Sessions:
             self.band_required = False
             self.dial = None
             self.history = History()
+            self.qso_revision = 0
             self.revision = rx.session_revision
         bands = self.bands()
         if (
@@ -241,6 +244,10 @@ class Sessions:
             if settings.get("hide_worked")
             else ()
         )
+        if self.station.qso_revision != self.qso_revision:
+            self.qso_revision = self.station.qso_revision
+            if isinstance(self.station.saved_qso, dict):
+                self.history.retain_contact(self.station.saved_qso["call"], messages)
         self.history.update(
             messages, settings["callsign"], worked, self.station.current_partner
         )

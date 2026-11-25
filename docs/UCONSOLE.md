@@ -89,6 +89,14 @@ icomzero --audio-device pulse
 
 `ICOMZERO_AUDIO_DEVICE` is also supported. If you explicitly set `PULSE_SINK`, the desktop build respects it. The default `pulse` device needs `libasound2-plugins`, included in the package dependencies.
 
+## Waterfall and desktop alerts
+
+Click the spectrum or waterfall to tune to that absolute frequency. Retuning shifts existing waterfall rows to keep their frequency alignment; brief scope gaps retain the visible history. Changing zoom or window dimensions starts a new scaled history. Clicks during transmission/tuning or in frequency labels are ignored.
+
+Saved QSOs and errors also appear through the desktop notification service, including when another app is focused. Repeated identical errors are suppressed for one minute. In-app status remains available if desktop notifications are unavailable. The desktop package includes `notify-send`; the graphical session must provide a notification daemon.
+
+Completed FT8 exchanges remain in the bounded decode history until they naturally age out. Hide Previous Contacts filters future worked-station CQs rather than making a just-completed conversation disappear; messages addressed to your station remain visible.
+
 ## FT8 clock synchronization
 
 Use an active NTP service before transmitting. **Chrony is recommended on uConsole** (`sudo apt install chrony`); it replaces systemd-timesyncd and monitors multiple time sources. Check `chronyc tracking` and `chronyc sources` after startup or a network change. Allow initial synchronization to settle before arming FT8.
