@@ -25,9 +25,9 @@ from models import DEFAULT_PROFILE, RADIO_CHOICES, presets
 from profiles import FIELDS, STEPS, ProfileStore
 from update_session import UpdateSession
 
-BG = "#101a21"
-PANEL = "#172731"
-CARD = "#20343e"
+BG = "#0a1117"
+PANEL = "#101b23"
+CARD = "#172832"
 TEXT = "#e4eff2"
 MUTED = "#94aab3"
 GREEN = "#70edbb"
@@ -184,7 +184,7 @@ class DesktopApp:
         self.style.configure("Accent.TButton", foreground=GREEN)
         self.style.configure("Danger.TButton", foreground=RED)
         self.style.configure(
-            "TEntry", fieldbackground="#223640", foreground=TEXT, padding=5
+            "TEntry", fieldbackground="#14232d", foreground=TEXT, padding=5
         )
         self.style.configure(
             "TCombobox",
@@ -226,7 +226,7 @@ class DesktopApp:
         self.style.map(
             "Treeview",
             background=[("selected", "#315666")],
-            foreground=[("selected", "#ffffff")],
+            foreground=[],
         )
         self.style.configure(
             "Horizontal.TProgressbar", background=GREEN, troughcolor=CARD
@@ -441,11 +441,11 @@ class DesktopApp:
         hover = getattr(canvas, "hover", False)
         selected = self.current() == key
         canvas.delete("all")
-        fill = "#20443e" if selected else ("#253944" if hover else "#182832")
+        fill = "#17362e" if selected else ("#1c2c36" if hover else "#111e27")
         edge = (
             GREEN
             if selected
-            else ("#657e89" if canvas == self.root.focus_get() else fill)
+            else ("#657e89" if str(canvas) == self.focus_path() else fill)
         )
         # Rounded native vector pill; text stays at system resolution.
         canvas.create_polygon(
@@ -771,13 +771,13 @@ class DesktopApp:
             (85, 85, 510, 55, 170),
         )
         self.decode_tree.tag_configure(
-            "own", background="#594325", foreground="#ffe3b0"
+            "own", background="#332b0b", foreground="#ffe45e"
         )
         self.decode_tree.tag_configure("tx", background="#173e5a", foreground="#9edfff")
         self.decode_tree.tag_configure(
             "activation", background="#174d36", foreground="#a4eed0"
         )
-        self.decode_tree.tag_configure("alternate", background="#1b303b")
+        self.decode_tree.tag_configure("alternate", background="#14232d")
         self.decode_tree.bind(
             "<Return>", lambda _: self.safe(lambda: self.ft8_action("reply")) or "break"
         )
@@ -1587,11 +1587,11 @@ class DesktopApp:
                 wanted.append(iid)
                 new[iid] = m
                 tag = (
-                    "tx"
-                    if m.local_tx
+                    "own"
+                    if m.involves(own)
                     else (
-                        "own"
-                        if m.involves(own)
+                        "tx"
+                        if m.local_tx
                         else (
                             "activation"
                             if activation_cq(m)
@@ -1832,8 +1832,20 @@ class DesktopApp:
             if not self.closing:
                 self.next_tick = self.root.after(80, self.tick)
 
+    def focus_path(self):
+        # Native ttk popdowns have Tcl paths but no Python widget object.
+        # focus_get/focus_displayof attempt nametowidget and raise KeyError.
+        if self.closing:
+            return ""
+        try:
+            return str(self.root.tk.call("focus", "-displayof", self.root._w))
+        except self.tk.TclError:
+            return ""
+
     def check_focus(self):
-        if self.root.focus_displayof() is None:
+        if self.closing:
+            return
+        if not self.focus_path():
             for callback in self.releases.values():
                 self.root.after_cancel(callback)
             self.releases.clear()

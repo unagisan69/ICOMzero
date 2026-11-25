@@ -321,7 +321,7 @@ class PowerAndDisplay(unittest.TestCase):
                 module["ft8_frame"](display, history, "K1ABC", True, "", .5)
             calls = [c for c in draw.call_args_list if c.args[2] == text]
             self.assertEqual(len(calls), 1, extra)
-            self.assertEqual(calls[0].kwargs["fill"], "#ffe1a1")
+            self.assertEqual(calls[0].kwargs["fill"], "#ffe45e")
             self.assertEqual(calls[0].kwargs["font"].size, 12)
 
 

@@ -967,14 +967,14 @@ def ft8_frame(
             own = message.involves(callsign)
             alternate = (history.start + row) % 2
             background = (
-                "#173e5a"
-                if message.local_tx
-                else ("#674719" if own else ("#174d36" if activation_cq(message) else (CARD if alternate else BG)))
+                "#332b0b"
+                if own
+                else ("#173e5a" if message.local_tx else ("#174d36" if activation_cq(message) else (CARD if alternate else BG)))
             )
             draw.rectangle((0, y, 319, y + 12), fill=background)
             text = ("TX " if message.local_tx else "") + message.text
             muted = "#81998d" if own or activation_cq(message) else "#748a91"
-            message_color = "#8bd6ff" if message.local_tx else ("#ffe1a1" if own else (GREEN if alternate else WHITE))
+            message_color = "#ffe45e" if own else ("#8bd6ff" if message.local_tx else (GREEN if alternate else WHITE))
             # The Maidenhead locator belongs to the decode, not the country label.
             fields = text.rsplit(" ", 1)
             grid = fields[-1] if len(fields) == 2 and fields[-1] not in ("RR73", "RRR", "R73", "73") and re.fullmatch(r"[A-R]{2}[0-9]{2}(?:[A-X]{2})?", fields[-1]) else ""
