@@ -11,6 +11,7 @@ from PIL import Image
 from contacts import MODES, manual_contact
 from countries import activation_cq, message_country, short_country
 from desktop_session import Sessions
+from desktop_notifications import DesktopAlerts
 from ft8log import (
     Logbook,
     load_settings,
@@ -53,6 +54,7 @@ class Spectrum:
         self.image = None
         self.key = None
         self.edges = None
+        self.zoom = None
         self.levels = None
         stops = np.array(
             (
@@ -86,9 +88,20 @@ class Spectrum:
         if (
             self.image is None
             or self.image.size != (width, height)
-            or self.edges != edges
+            or self.zoom != zoom
         ):
             self.image = Image.new("RGB", (width, height), "#080f20")
+        elif self.edges != edges:
+            old_start, old_end = self.edges
+            scale = (end - start) / (old_end - old_start)
+            shift = (start - old_start) * width / (old_end - old_start)
+            self.image = self.image.transform(
+                (width, height),
+                Image.Transform.AFFINE,
+                (scale, 0, shift, 0, 1, 0),
+                resample=Image.Resampling.BILINEAR,
+                fillcolor="#080f20",
+            )
         positions = np.linspace(
             (start - lo) * len(bins) / (hi - lo),
             (end - lo) * len(bins) / (hi - lo),
@@ -103,6 +116,7 @@ class Spectrum:
         self.image.paste(Image.fromarray(row[None, :, :]), (0, 0))
         self.key = key
         self.edges = edges
+        self.zoom = zoom
         return True
 
 
@@ -126,6 +140,9 @@ class DesktopApp:
         self.store = ProfileStore(app["CONFIG"])
         self.book = book or Logbook()
         self.sessions = sessions or Sessions(app, self.book)
+        self.alerts = DesktopAlerts()
+        self.alert_error = ""
+        self.qso_source = None
         self.update = UpdateSession()
         self.closing = False
         self.stop_worker = None
@@ -394,6 +411,8 @@ class DesktopApp:
     def notify(self, text, error=False):
         self.notice.configure(text=text, foreground=RED if error else GREEN)
         self.toast_until = time.monotonic() + 5
+        if error:
+            self.alerts.send("ICOMzero error", text, error=True)
 
     def current(self):
         selected = self.tabs.select()
@@ -583,6 +602,7 @@ class DesktopApp:
             frame, bg="#080f20", highlightthickness=0, takefocus=True, height=320
         )
         self.radio_canvas.pack(fill="both", expand=True)
+        self.radio_canvas.bind("<Button-1>", self.click_spectrum)
         self.radio_canvas.bind(
             "<Configure>", lambda _: setattr(self.spectrum, "key", None)
         )
@@ -1102,6 +1122,11 @@ class DesktopApp:
                     else manual_contact(form, load_settings())
                 )
                 added = self.book.add(q)
+                if added:
+                    self.alerts.send(
+                        "QSO logged",
+                        "Contact with " + q["call"] + " saved to the onboard log",
+                    )
                 self.notify(("Saved " if added else "Already logged ") + q["call"])
                 dialog.destroy()
                 self.refresh_log(force=True)
@@ -1429,6 +1454,28 @@ class DesktopApp:
         if password is not None:
             self.update.install(password)
 
+    def click_spectrum(self, event):
+        rx = self.sessions.rx
+        if (
+            not rx
+            or self.sessions.mode != "radio"
+            or self.sessions.switching
+            or not rx.busy()
+            or not self.spectrum.edges
+            or rx.radio_state.get("ptt")
+            or rx.radio_state.get("ptt_pending")
+            or rx.radio_state.get("tuner") == 2
+        ):
+            return
+        width = max(20, self.radio_canvas.winfo_width() - 32)
+        height = max(30, self.radio_canvas.winfo_height() - 125)
+        if not (16 <= event.x < 16 + width and 8 <= event.y <= 100 + height):
+            return
+        start, end = self.spectrum.edges
+        hz = round(start + (event.x - 16) * (end - start) / (width - 1))
+        self.safe(lambda: rx.tune(hz))
+        self.radio_canvas.focus_set()
+
     def draw_spectrum(self):
         rx = self.sessions.rx
         if not rx or self.sessions.mode != "radio":
@@ -1441,6 +1488,8 @@ class DesktopApp:
             if getattr(self, "scope_waiting", False):
                 return
             self.scope_waiting = True
+            if self.spectrum.image is not None:
+                return
             canvas.delete("all")
             canvas.create_text(
                 30,
@@ -1601,10 +1650,19 @@ class DesktopApp:
             if name:
                 self.ft8_band.set(name)
         self.ft8_bands.configure(values=[name for name, _ in s.bands()])
+        if self.qso_source is not s.station:
+            self.qso_source = s.station
+            self.saved_revision = 0
         if s.station and s.station.qso_revision != self.saved_revision:
             self.saved_revision = s.station.qso_revision
             if s.station.saved_qso:
                 self.notify("✓ QSO saved · " + s.station.saved_qso["call"])
+                self.alerts.send(
+                    "QSO logged",
+                    "Contact with "
+                    + s.station.saved_qso["call"]
+                    + " saved to the onboard log",
+                )
 
     def tick(self):
         try:
@@ -1640,6 +1698,40 @@ class DesktopApp:
                 state="disabled" if s.armed else "normal"
             )
             fault = rx.radio_state.get("tx_fault") if rx else None
+            connection_error = (
+                rx.status
+                if rx
+                and rx.status.startswith(
+                    (
+                        "Reconnecting",
+                        "Connection failed",
+                        "Connection error",
+                        "Radio control",
+                        "Radio disconnected",
+                    )
+                )
+                else ""
+            )
+            station_error = ""
+            if s.station:
+                status = str(s.station.status)
+                if any(
+                    word in status.lower()
+                    for word in (
+                        "blocked",
+                        "failed",
+                        "not confirmed",
+                        "telemetry lost",
+                        "timed out",
+                        "clock not synchronized",
+                        "could not be verified",
+                    )
+                ):
+                    station_error = status
+            error = fault or s.error or connection_error or station_error
+            if error and error != self.alert_error:
+                self.alerts.send("ICOMzero error", str(error), error=True)
+            self.alert_error = error
             if fault:
                 self.notice.configure(text="TX stopped · " + str(fault), foreground=RED)
             elif s.error:
@@ -1909,6 +2001,7 @@ class DesktopApp:
             return
         self.update.cancel()
         self.book.close()
+        self.alerts.close()
         self.root.destroy()
 
     def run(self):

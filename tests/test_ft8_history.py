@@ -128,7 +128,7 @@ class WorkedHistoryTests(unittest.TestCase):
         ]
         history = History()
         history.update(messages, "K4TTL", frozenset({"W1AW"}))
-        self.assertEqual(history.messages, messages[2:])
+        self.assertEqual(history.messages, messages[1:])
         history.update(messages, "K4TTL", frozenset({"W1AW"}), "W1AW")
         self.assertEqual(history.messages, messages)
         history.update(messages, "K4TTL")

@@ -43,7 +43,7 @@ Download the **desktop ARM64 package** from [GitHub Releases](https://github.com
 sudo apt install ./icomzero-desktop_0.18.0-1_arm64.deb
 ```
 
-Open **ICOMzero** from the desktop menu. The native desktop interface has crisp system fonts, a full-width spectrum/waterfall, and persistent **Radio · FT8 · Log · Settings** tabs. View or sync Log and browse Settings while Radio or FT8 continues. Switching Radio ↔ FT8 hands off the radio connection. **Ctrl+1–4** selects tabs and **Ctrl+Space** stops TX from any tab. The resizable window is keyboard-first: **↑/↓ navigate**, **←/→ tune**, **Ctrl+↑/↓ zoom**, **Ctrl+←/→ volume**, **Ctrl+M mute**. Trackball navigation is optional. **Ctrl+Enter** toggles fullscreen; **Ctrl+Q** quits safely. Profiles and logs use the same private format as Cardputer.
+Open **ICOMzero** from the desktop menu. The native desktop interface has crisp system fonts, a full-width spectrum/waterfall, and persistent **Radio · FT8 · Log · Settings** tabs. View or sync Log and browse Settings while Radio or FT8 continues. Switching Radio ↔ FT8 hands off the radio connection. **Ctrl+1–4** selects tabs and **Ctrl+Space** stops TX from any tab. The resizable window is keyboard-first: **↑/↓ navigate**, **←/→ tune**, **Ctrl+↑/↓ zoom**, **Ctrl+←/→ volume**, **Ctrl+M mute**. Click the spectrum/waterfall to tune; its history stays aligned while retuning. Desktop alerts report saved QSOs and errors. Trackball navigation is optional. **Ctrl+Enter** toggles fullscreen; **Ctrl+Q** quits safely. Profiles and logs use the same private format as Cardputer.
 
 [Installation, full controls and migration →](docs/UCONSOLE.md)
 
@@ -145,7 +145,7 @@ Automation starts only when you explicitly select it. Stop Transmit, exit, relev
 - Independent **Wavelog and QRZ** uploads, with pending-upload retries and connection tests.
 - **Record QSO** for a manually reviewed contact when a terminal acknowledgment was missed.
 - **Sync Log** imports worked history from either service.
-- **Hide previous contacts** filters FT8 contacts on the **current band only**. Auto CQ still answers or queues previously worked stations addressing you.
+- **Hide previous contacts** filters FT8 contacts on the **current band only**. Completed exchanges stay visible until they age out of the decode history. Auto CQ still answers or queues previously worked stations addressing you.
 - Offline country/territory estimates and **USA-XX state labels** from registered callsign data. These describe callsign entities or registered addresses, not live portable locations.
 - A green saved-QSO notification and optional QSO beep; a separate beep signals Auto CQ ending without responses.
 

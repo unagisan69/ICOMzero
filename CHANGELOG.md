@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.19.3 — 2026-11-24
+
+- Keep completed FT8 exchanges in the current decode history on both platforms. Hide future worked-station CQs while retaining messages addressed to our station, including late acknowledgments.
+- Add asynchronous uConsole desktop notifications for saved QSOs and errors, with duplicate-error suppression and a nonfatal fallback when desktop alerts are unavailable.
+- Preserve and align uConsole waterfall history by absolute frequency while tuning, retain it across brief scope gaps, and allow clicking the spectrum/waterfall to tune. Ignore clicks in labels or during TX/tuning.
+
 ## 0.19.2 — 2026-11-24
 
 - Support chrony clock monitoring for FT8. Check the current remaining system-clock correction and uncertainty instead of treating historical NTP sample offsets as current clock error.

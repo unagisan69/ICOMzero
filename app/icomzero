@@ -1269,6 +1269,8 @@ def ft8_ui(lcd, keyboard):
             if getattr(station, "qso_revision", 0) != qso_revision:
                 qso_revision = station.qso_revision
                 saved_qso = station.saved_qso
+                if saved_qso:
+                    history.retain_contact(saved_qso["call"], decoder.snapshot()[0])
                 qso_until = now + 3.5
             if station.status != last_station_status:
                 last_station_status = station.status
