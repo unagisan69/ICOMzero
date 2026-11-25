@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.19.4 — 2026-11-24
+
+- Fix repeated uConsole interface KeyError warnings while native combo-box popdowns have focus. Query the Tcl focus path without converting internal windows into Python widgets; retain normal focus-loss key cleanup.
+- Darken the uConsole background, panels, controls and alternating decode rows while retaining readable foreground contrast.
+- Use bright yellow for all decode messages containing our callsign on both platforms, including local TX rows, against a dark yellow background.
+- Cover native focus-path handling and callsign color rendering in regressions. Cardputer hardware validation is deferred while the device is offline.
+
 ## 0.19.3 — 2026-11-24
 
 - Keep completed FT8 exchanges in the current decode history on both platforms. Hide future worked-station CQs while retaining messages addressed to our station, including late acknowledgments.

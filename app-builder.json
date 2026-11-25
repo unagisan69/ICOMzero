@@ -1,6 +1,6 @@
 {
   "package_name": "icomzero",
-  "version": "0.19.3",
+  "version": "0.19.4",
   "app_name": "ICOMzero",
   "bin_name": "icomzero",
   "description": "Network radio audio, waterfall and FT8 contacts with logging",
