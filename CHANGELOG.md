@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.19.5 — 2026-11-25
+
+- Distinguish incoming replies containing our callsign from our own FT8 transmissions on both platforms: yellowish reply backgrounds with dark blue text, and quieter dark blue TX rows with subdued blue-gray text.
+- Give local-TX styling priority even when its text contains our callsign; keep normal CQ and POTA/SOTA styling distinct. Preserve readable native selection colors.
+- Update renderer regressions; Cardputer hardware testing remains deferred while offline.
+
 ## 0.19.4 — 2026-11-24
 
 - Fix repeated uConsole interface KeyError warnings while native combo-box popdowns have focus. Query the Tcl focus path without converting internal windows into Python widgets; retain normal focus-loss key cleanup.
