@@ -226,7 +226,7 @@ class DesktopApp:
         self.style.map(
             "Treeview",
             background=[("selected", "#315666")],
-            foreground=[],
+            foreground=[("selected", TEXT)],
         )
         self.style.configure(
             "Horizontal.TProgressbar", background=GREEN, troughcolor=CARD
@@ -771,9 +771,9 @@ class DesktopApp:
             (85, 85, 510, 55, 170),
         )
         self.decode_tree.tag_configure(
-            "own", background="#332b0b", foreground="#ffe45e"
+            "own", background="#e6cc73", foreground="#132b43"
         )
-        self.decode_tree.tag_configure("tx", background="#173e5a", foreground="#9edfff")
+        self.decode_tree.tag_configure("tx", background="#152a38", foreground="#8ba6b5")
         self.decode_tree.tag_configure(
             "activation", background="#174d36", foreground="#a4eed0"
         )
@@ -1587,11 +1587,11 @@ class DesktopApp:
                 wanted.append(iid)
                 new[iid] = m
                 tag = (
-                    "own"
-                    if m.involves(own)
+                    "tx"
+                    if m.local_tx
                     else (
-                        "tx"
-                        if m.local_tx
+                        "own"
+                        if m.involves(own)
                         else (
                             "activation"
                             if activation_cq(m)

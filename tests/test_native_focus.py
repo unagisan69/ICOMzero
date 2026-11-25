@@ -43,7 +43,7 @@ class NativeFocus(unittest.TestCase):
 
 
 class CallsignRender(unittest.TestCase):
-    def test_received_and_local_tx_callsigns_use_yellow(self):
+    def test_incoming_replies_and_local_tx_have_distinct_colors(self):
         import runpy
         from pathlib import Path
         from PIL import ImageDraw, ImageFont
@@ -63,4 +63,4 @@ class CallsignRender(unittest.TestCase):
                 app["ft8_frame"](display, history, "K1ABC", True, "", 0.5)
             expected = ("TX " if local else "") + text
             calls = [c for c in draw.call_args_list if c.args[2] == expected]
-            self.assertEqual(calls[0].kwargs["fill"], "#ffe45e")
+            self.assertEqual(calls[0].kwargs["fill"], "#8ba6b5" if local else "#132b43")
